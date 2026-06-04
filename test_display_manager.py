@@ -10,6 +10,7 @@ from display_manager import (
     parse_edid_monitor_name,
     profile_summary,
     short_identity,
+    taskbar_diagnostic_parts,
     taskbar_visibility_payload,
     unique_profile_name,
 )
@@ -78,6 +79,18 @@ class DisplayManagerLogicTests(unittest.TestCase):
 
         self.assertEqual(payload["taskbar_visible_displays"], ["DISPLAY1", "DISPLAY2"])
         self.assertEqual(payload["taskbar_visible_monitors"], ["MONITOR-1", "KEY-2"])
+
+    def test_taskbar_diagnostic_parts_show_actual_and_expected_state(self):
+        taskbars = [
+            {"device_name": "DISPLAY1", "visible": True},
+            {"device_name": "DISPLAY2", "visible": True},
+            {"device_name": None, "visible": False},
+        ]
+
+        self.assertEqual(
+            taskbar_diagnostic_parts(taskbars, {"DISPLAY1"}),
+            ["DISPLAY1: visible/show", "DISPLAY2: visible/hide", "unmapped: hidden/hide"],
+        )
 
     def test_unique_profile_name_adds_numeric_suffix(self):
         profiles = [{"name": "Triple Copy"}, {"name": "Triple Copy 2"}]

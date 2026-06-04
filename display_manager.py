@@ -173,6 +173,9 @@ GetClassNameW.restype = ctypes.c_int
 GetWindowRect = user32.GetWindowRect
 GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
 GetWindowRect.restype = wintypes.BOOL
+IsWindowVisible = user32.IsWindowVisible
+IsWindowVisible.argtypes = [wintypes.HWND]
+IsWindowVisible.restype = wintypes.BOOL
 ShowWindow = user32.ShowWindow
 ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 ShowWindow.restype = wintypes.BOOL
@@ -397,6 +400,7 @@ class TaskbarController:
                     "class_name": class_name,
                     "rect": (rect.left, rect.top, rect.right, rect.bottom),
                     "device_name": display.device_name if display else None,
+                    "visible": bool(IsWindowVisible(hwnd)),
                 }
             )
             return True
@@ -411,7 +415,10 @@ class TaskbarController:
             device_name = taskbar["device_name"]
             if device_name is None:
                 continue
-            ShowWindow(taskbar["hwnd"], SW_SHOW if device_name in visible else SW_HIDE)
+            should_show = device_name in visible
+            if taskbar["visible"] == should_show:
+                continue
+            ShowWindow(taskbar["hwnd"], SW_SHOW if should_show else SW_HIDE)
             changed += 1
         return changed
 
@@ -615,6 +622,17 @@ def hotkey_issue_messages(profiles, statuses):
         for profile in profiles
         if statuses.get(profile["name"]) in {"invalid", "unavailable"}
     ]
+
+
+def taskbar_diagnostic_parts(taskbars, desired_device_names):
+    desired = set(desired_device_names)
+    parts = []
+    for taskbar in taskbars:
+        device_name = taskbar.get("device_name") or "unmapped"
+        actual = "visible" if taskbar.get("visible") else "hidden"
+        expected = "show" if device_name in desired else "hide"
+        parts.append(f"{device_name}: {actual}/{expected}")
+    return parts
 
 
 def display_value(display, key, default=""):
@@ -897,6 +915,9 @@ class DisplayManagerApp(tk.Tk):
         ttk.Button(taskbar_buttons, text="Refresh Taskbars", command=self.refresh_taskbar_status).pack(
             side=tk.LEFT, padx=(6, 0)
         )
+        ttk.Button(taskbar_buttons, text="Diagnose", command=self.diagnose_taskbars).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
         ttk.Checkbutton(
             taskbar_buttons,
             text="Keep enforced",
@@ -1099,9 +1120,19 @@ class DisplayManagerApp(tk.Tk):
     def refresh_taskbar_status(self):
         taskbars = self.taskbar_controller.list_taskbars(self.displays)
         mapped = sum(1 for taskbar in taskbars if taskbar["device_name"])
+        visible = sum(1 for taskbar in taskbars if taskbar["visible"])
         self._set_status(
-            f"Found {len(self.displays)} monitor(s), {len(taskbars)} taskbar window(s), {mapped} mapped."
+            f"Found {len(self.displays)} monitor(s), {len(taskbars)} taskbar window(s), {mapped} mapped, {visible} visible."
         )
+
+    def diagnose_taskbars(self):
+        if self._has_saved_taskbar_visibility():
+            desired = set(self._resolve_taskbar_visible_devices(self.config))
+        else:
+            desired = {display.device_name for display in self.displays if display.active}
+        taskbars = self.taskbar_controller.list_taskbars(self.displays)
+        parts = taskbar_diagnostic_parts(taskbars, desired)
+        self._set_status("Taskbars - " + "; ".join(parts[:4]) if parts else "Taskbars - none found")
 
     def _current_taskbar_visible_selection(self):
         return [
