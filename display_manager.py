@@ -32,6 +32,7 @@ CDS_UPDATEREGISTRY = 0x00000001
 CDS_SET_PRIMARY = 0x00000010
 CDS_NORESET = 0x10000000
 DISP_CHANGE_SUCCESSFUL = 0
+MONITORINFOF_PRIMARY = 0x00000001
 
 SW_HIDE = 0
 SW_SHOW = 5
@@ -105,6 +106,16 @@ class RECT(ctypes.Structure):
     ]
 
 
+class MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", RECT),
+        ("rcWork", RECT),
+        ("dwFlags", wintypes.DWORD),
+        ("szDevice", wintypes.WCHAR * CCHDEVICENAME),
+    ]
+
+
 class MSG(ctypes.Structure):
     _fields_ = [
         ("hwnd", wintypes.HWND),
@@ -138,6 +149,20 @@ ChangeDisplaySettingsExW.argtypes = [
     wintypes.LPVOID,
 ]
 ChangeDisplaySettingsExW.restype = wintypes.LONG
+
+MonitorEnumProc = ctypes.WINFUNCTYPE(
+    wintypes.BOOL,
+    wintypes.HANDLE,
+    wintypes.HDC,
+    ctypes.POINTER(RECT),
+    wintypes.LPARAM,
+)
+EnumDisplayMonitors = user32.EnumDisplayMonitors
+EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.POINTER(RECT), MonitorEnumProc, wintypes.LPARAM]
+EnumDisplayMonitors.restype = wintypes.BOOL
+GetMonitorInfoW = user32.GetMonitorInfoW
+GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFOEXW)]
+GetMonitorInfoW.restype = wintypes.BOOL
 
 EnumWindows = user32.EnumWindows
 EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -186,40 +211,49 @@ class DisplayInfo:
 class DisplayController:
     def list_displays(self):
         displays = []
-        index = 0
-        while True:
-            adapter = DISPLAY_DEVICEW()
-            adapter.cb = ctypes.sizeof(adapter)
-            if not EnumDisplayDevicesW(None, index, ctypes.byref(adapter), 0):
-                break
+        seen_devices = set()
+
+        def callback(hmonitor, _hdc, _rect, _data):
+            info = MONITORINFOEXW()
+            info.cbSize = ctypes.sizeof(info)
+            if not GetMonitorInfoW(hmonitor, ctypes.byref(info)):
+                return True
+
+            device_name = info.szDevice
+            if not device_name or device_name in seen_devices:
+                return True
+            seen_devices.add(device_name)
 
             mode = DEVMODEW()
             mode.dmSize = ctypes.sizeof(mode)
-            has_mode = EnumDisplaySettingsW(adapter.DeviceName, ENUM_CURRENT_SETTINGS, ctypes.byref(mode))
+            has_mode = EnumDisplaySettingsW(device_name, ENUM_CURRENT_SETTINGS, ctypes.byref(mode))
 
-            monitor_name = adapter.DeviceString
-            monitor = DISPLAY_DEVICEW()
-            monitor.cb = ctypes.sizeof(monitor)
-            if EnumDisplayDevicesW(adapter.DeviceName, 0, ctypes.byref(monitor), 0):
-                monitor_name = monitor.DeviceString or monitor_name
-
-            active = bool(adapter.StateFlags & DISPLAY_DEVICE_ACTIVE) and bool(has_mode)
             displays.append(
                 DisplayInfo(
-                    device_name=adapter.DeviceName,
-                    label=f"{adapter.DeviceName} - {monitor_name}",
-                    active=active,
-                    primary=bool(adapter.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE),
-                    x=int(mode.dmPosition.x) if has_mode else 0,
-                    y=int(mode.dmPosition.y) if has_mode else 0,
-                    width=int(mode.dmPelsWidth) if has_mode else 0,
-                    height=int(mode.dmPelsHeight) if has_mode else 0,
+                    device_name=device_name,
+                    label=self._monitor_label(device_name),
+                    active=True,
+                    primary=bool(info.dwFlags & MONITORINFOF_PRIMARY),
+                    x=int(info.rcMonitor.left),
+                    y=int(info.rcMonitor.top),
+                    width=int(info.rcMonitor.right - info.rcMonitor.left),
+                    height=int(info.rcMonitor.bottom - info.rcMonitor.top),
                     frequency=int(mode.dmDisplayFrequency) if has_mode else 0,
                     bits_per_pixel=int(mode.dmBitsPerPel) if has_mode else 32,
                 )
             )
-            index += 1
+            return True
+
+        EnumDisplayMonitors(None, None, MonitorEnumProc(callback), 0)
         return displays
+
+    def _monitor_label(self, device_name):
+        adapter = DISPLAY_DEVICEW()
+        adapter.cb = ctypes.sizeof(adapter)
+        adapter_name = device_name
+        if EnumDisplayDevicesW(device_name, 0, ctypes.byref(adapter), 0):
+            adapter_name = adapter.DeviceString or adapter_name
+        return f"{device_name} - {adapter_name}"
 
     def apply_profile(self, profile):
         errors = []
@@ -435,6 +469,20 @@ def display_to_profile_entry(display):
     return entry
 
 
+def profile_summary(profile):
+    displays = profile.get("displays", [])
+    applied = [display for display in displays if display.get("apply", True)]
+    enabled = [display for display in applied if display.get("enabled", display.get("active", True))]
+    disabled = [display for display in applied if not display.get("enabled", display.get("active", True))]
+    taskbars = set(profile.get("taskbar_visible_displays", []))
+    taskbar_count = sum(1 for display in enabled if display.get("device_name") in taskbars)
+    return {
+        "enabled": f"{len(enabled)} on",
+        "disabled": f"{len(disabled)} off",
+        "taskbars": f"{taskbar_count} taskbar",
+    }
+
+
 class ProfileEditorDialog(tk.Toplevel):
     def __init__(self, parent, profile):
         super().__init__(parent)
@@ -570,8 +618,8 @@ class DisplayManagerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("980x640")
-        self.minsize(860, 560)
+        self.geometry("1080x700")
+        self.minsize(980, 600)
 
         self.display_controller = DisplayController()
         self.taskbar_controller = TaskbarController()
@@ -580,11 +628,15 @@ class DisplayManagerApp(tk.Tk):
         self.config = load_config()
         self.displays = []
         self.taskbar_vars = {}
+        self.enforce_taskbars_var = tk.BooleanVar(
+            value=bool(self.config.get("enforce_taskbar_visibility", True))
+        )
 
         self._build_ui()
         self.refresh_displays()
         self.refresh_profiles()
         self.after(200, self._poll_hotkeys)
+        self.after(2500, self._taskbar_enforcement_loop)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self):
@@ -602,10 +654,10 @@ class DisplayManagerApp(tk.Tk):
         display_frame.rowconfigure(0, weight=1)
         display_frame.columnconfigure(0, weight=1)
 
-        columns = ("device", "state", "position", "resolution", "refresh")
+        columns = ("monitor", "state", "position", "resolution", "refresh")
         self.display_tree = ttk.Treeview(display_frame, columns=columns, show="headings", height=10)
         for column, width in {
-            "device": 230,
+            "monitor": 260,
             "state": 90,
             "position": 110,
             "resolution": 110,
@@ -624,8 +676,18 @@ class DisplayManagerApp(tk.Tk):
         profile_frame.rowconfigure(0, weight=1)
         profile_frame.columnconfigure(0, weight=1)
 
-        self.profile_list = tk.Listbox(profile_frame, height=10, activestyle="dotbox")
-        self.profile_list.grid(row=0, column=0, sticky="nsew")
+        profile_columns = ("name", "hotkey", "enabled", "disabled", "taskbars")
+        self.profile_tree = ttk.Treeview(profile_frame, columns=profile_columns, show="headings", height=10)
+        for column, width in {
+            "name": 170,
+            "hotkey": 110,
+            "enabled": 70,
+            "disabled": 70,
+            "taskbars": 90,
+        }.items():
+            self.profile_tree.heading(column, text=column.title())
+            self.profile_tree.column(column, width=width, anchor="w")
+        self.profile_tree.grid(row=0, column=0, sticky="nsew")
 
         profile_buttons = ttk.Frame(profile_frame)
         profile_buttons.grid(row=1, column=0, sticky="ew", pady=(10, 0))
@@ -658,6 +720,12 @@ class DisplayManagerApp(tk.Tk):
         ttk.Button(taskbar_buttons, text="Refresh Taskbars", command=self.refresh_taskbar_status).pack(
             side=tk.LEFT, padx=(6, 0)
         )
+        ttk.Checkbutton(
+            taskbar_buttons,
+            text="Keep enforced",
+            variable=self.enforce_taskbars_var,
+            command=self._save_taskbar_enforcement_setting,
+        ).pack(side=tk.LEFT, padx=(12, 0))
 
         self.status = ttk.Label(root, text="", anchor="w")
         self.status.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
@@ -682,10 +750,22 @@ class DisplayManagerApp(tk.Tk):
         self.refresh_taskbar_status()
 
     def refresh_profiles(self):
-        self.profile_list.delete(0, tk.END)
-        for profile in self.config.get("profiles", []):
+        self.profile_tree.delete(*self.profile_tree.get_children())
+        for index, profile in enumerate(self.config.get("profiles", [])):
             hotkey = profile.get("hotkey") or "no hotkey"
-            self.profile_list.insert(tk.END, f"{profile['name']} ({hotkey})")
+            summary = profile_summary(profile)
+            self.profile_tree.insert(
+                "",
+                tk.END,
+                iid=str(index),
+                values=(
+                    profile["name"],
+                    hotkey,
+                    summary["enabled"],
+                    summary["disabled"],
+                    summary["taskbars"],
+                ),
+            )
         self.hotkeys.start(self.config.get("profiles", []))
 
     def save_current_profile(self):
@@ -746,12 +826,18 @@ class DisplayManagerApp(tk.Tk):
     def apply_profile(self, profile):
         errors = self.display_controller.apply_profile(profile)
         self.refresh_displays()
-        visible = profile.get("taskbar_visible_displays", [])
-        if visible:
-            self.taskbar_controller.apply_visibility(visible, self.displays)
+        if "taskbar_visible_displays" in profile:
+            visible = profile.get("taskbar_visible_displays", [])
+            self.config["taskbar_visible_displays"] = visible
+            save_config(self.config)
+            self._rebuild_taskbar_checks()
+            changed = self._apply_taskbar_visibility(visible, update_status=False)
+            self._schedule_taskbar_reapply(visible)
+        else:
+            changed = 0
         if errors:
             messagebox.showwarning("Profile Applied With Warnings", "\n".join(errors), parent=self)
-        self._set_status(f"Applied profile '{profile['name']}'.")
+        self._set_status(f"Applied profile '{profile['name']}'. Updated {changed} taskbar window(s).")
 
     def delete_selected_profile(self):
         profile = self._selected_profile()
@@ -767,14 +853,11 @@ class DisplayManagerApp(tk.Tk):
         self._set_status(f"Deleted profile '{profile['name']}'.")
 
     def apply_taskbar_visibility(self):
-        visible = [
-            display.device_name
-            for display in self.displays
-            if display.active and self.taskbar_vars.get(display.device_name, tk.BooleanVar(value=True)).get()
-        ]
-        changed = self.taskbar_controller.apply_visibility(visible, self.displays)
+        visible = self._current_taskbar_visible_selection()
         self.config["taskbar_visible_displays"] = visible
         save_config(self.config)
+        changed = self._apply_taskbar_visibility(visible, update_status=False)
+        self._schedule_taskbar_reapply(visible)
         self._set_status(f"Updated {changed} taskbar window(s).")
 
     def show_taskbar_everywhere(self):
@@ -800,15 +883,41 @@ class DisplayManagerApp(tk.Tk):
         taskbars = self.taskbar_controller.list_taskbars(self.displays)
         mapped = sum(1 for taskbar in taskbars if taskbar["device_name"])
         self._set_status(
-            f"Found {len(self.displays)} display adapter(s), {len(taskbars)} taskbar window(s), {mapped} mapped."
+            f"Found {len(self.displays)} monitor(s), {len(taskbars)} taskbar window(s), {mapped} mapped."
         )
 
+    def _current_taskbar_visible_selection(self):
+        return [
+            display.device_name
+            for display in self.displays
+            if display.active and self.taskbar_vars.get(display.device_name, tk.BooleanVar(value=True)).get()
+        ]
+
+    def _apply_taskbar_visibility(self, visible, update_status=True):
+        changed = self.taskbar_controller.apply_visibility(visible, self.displays)
+        if update_status:
+            self._set_status(f"Updated {changed} taskbar window(s).")
+        return changed
+
+    def _schedule_taskbar_reapply(self, visible):
+        for delay_ms in (350, 1200, 2500, 5000):
+            self.after(delay_ms, lambda selected=list(visible): self._apply_taskbar_visibility(selected, False))
+
+    def _taskbar_enforcement_loop(self):
+        if self.enforce_taskbars_var.get() and "taskbar_visible_displays" in self.config:
+            self._apply_taskbar_visibility(self.config.get("taskbar_visible_displays", []), False)
+        self.after(2500, self._taskbar_enforcement_loop)
+
+    def _save_taskbar_enforcement_setting(self):
+        self.config["enforce_taskbar_visibility"] = self.enforce_taskbars_var.get()
+        save_config(self.config)
+
     def _selected_profile(self):
-        selection = self.profile_list.curselection()
+        selection = self.profile_tree.selection()
         if not selection:
             messagebox.showinfo("Select Profile", "Choose a profile first.", parent=self)
             return None
-        return self.config.get("profiles", [])[selection[0]]
+        return self.config.get("profiles", [])[int(selection[0])]
 
     def _poll_hotkeys(self):
         try:
