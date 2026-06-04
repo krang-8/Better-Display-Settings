@@ -478,6 +478,7 @@ def normalize_config(config):
     for profile in config["profiles"]:
         profile.setdefault("hotkey", "")
         profile.setdefault("taskbar_visible_displays", [])
+        profile.setdefault("taskbar_visible_monitors", [])
         for display in profile.get("displays", []):
             display.setdefault("apply", True)
             display.setdefault("enabled", display.get("active", True))
@@ -502,13 +503,41 @@ def profile_summary(profile):
     applied = [display for display in displays if display.get("apply", True)]
     enabled = [display for display in applied if display.get("enabled", display.get("active", True))]
     disabled = [display for display in applied if not display.get("enabled", display.get("active", True))]
-    taskbars = set(profile.get("taskbar_visible_displays", []))
-    taskbar_count = sum(1 for display in enabled if display.get("device_name") in taskbars)
+    taskbar_count = len(taskbar_visible_entries(profile, enabled))
     return {
         "enabled": f"{len(enabled)} on",
         "disabled": f"{len(disabled)} off",
         "taskbars": f"{taskbar_count} taskbar",
     }
+
+
+def taskbar_visible_entries(source, displays):
+    visible_devices = set(source.get("taskbar_visible_displays", []))
+    visible_monitors = set(source.get("taskbar_visible_monitors", []))
+    return [
+        display
+        for display in displays
+        if display_value(display, "device_name") in visible_devices
+        or display_value(display, "monitor_id") in visible_monitors
+        or display_value(display, "monitor_key") in visible_monitors
+    ]
+
+
+def taskbar_visibility_payload(displays):
+    return {
+        "taskbar_visible_displays": [display_value(display, "device_name") for display in displays],
+        "taskbar_visible_monitors": [
+            display_value(display, "monitor_id") or display_value(display, "monitor_key")
+            for display in displays
+            if display_value(display, "monitor_id") or display_value(display, "monitor_key")
+        ],
+    }
+
+
+def display_value(display, key, default=""):
+    if isinstance(display, dict):
+        return display.get(key, default)
+    return getattr(display, key, default)
 
 
 def short_identity(identity):
@@ -558,10 +587,15 @@ class ProfileEditorDialog(tk.Toplevel):
             )
 
         visible_taskbars = set(self.profile.get("taskbar_visible_displays", []))
+        visible_monitors = set(self.profile.get("taskbar_visible_monitors", []))
         for row_index, display in enumerate(self.profile.get("displays", []), start=1):
             apply_var = tk.BooleanVar(value=bool(display.get("apply", True)))
             enabled_var = tk.BooleanVar(value=bool(display.get("enabled", display.get("active", True))))
-            taskbar_var = tk.BooleanVar(value=display.get("device_name") in visible_taskbars)
+            taskbar_var = tk.BooleanVar(
+                value=display.get("device_name") in visible_taskbars
+                or display.get("monitor_id") in visible_monitors
+                or display.get("monitor_key") in visible_monitors
+            )
             values = {
                 "x": tk.StringVar(value=str(display.get("x", 0))),
                 "y": tk.StringVar(value=str(display.get("y", 0))),
@@ -623,6 +657,7 @@ class ProfileEditorDialog(tk.Toplevel):
 
         updated_displays = []
         visible_taskbars = []
+        visible_taskbar_entries = []
         for row in self.rows:
             display = dict(row["display"])
             display["apply"] = row["apply"].get()
@@ -642,13 +677,16 @@ class ProfileEditorDialog(tk.Toplevel):
                 return
             if display["apply"] and display["enabled"] and row["taskbar"].get():
                 visible_taskbars.append(display["device_name"])
+                visible_taskbar_entries.append(display)
             updated_displays.append(display)
 
+        visibility = taskbar_visibility_payload(visible_taskbar_entries)
         self.result = {
             "name": name,
             "hotkey": hotkey,
             "displays": updated_displays,
             "taskbar_visible_displays": visible_taskbars,
+            "taskbar_visible_monitors": visibility["taskbar_visible_monitors"],
         }
         self.destroy()
 
@@ -829,12 +867,8 @@ class DisplayManagerApp(tk.Tk):
             "name": name.strip(),
             "hotkey": (hotkey or "").strip(),
             "displays": [display_to_profile_entry(display) for display in self.displays],
-            "taskbar_visible_displays": [
-                display.device_name
-                for display in self.displays
-                if display.active and self.taskbar_vars.get(display.device_name, tk.BooleanVar(value=True)).get()
-            ],
         }
+        profile.update(taskbar_visibility_payload(self._current_taskbar_visible_selection()))
         profiles = [item for item in self.config.get("profiles", []) if item["name"] != profile["name"]]
         profiles.append(profile)
         self.config["profiles"] = profiles
@@ -867,9 +901,10 @@ class DisplayManagerApp(tk.Tk):
     def apply_profile(self, profile):
         errors = self.display_controller.apply_profile(profile)
         self.refresh_displays()
-        if "taskbar_visible_displays" in profile:
-            visible = profile.get("taskbar_visible_displays", [])
+        if "taskbar_visible_displays" in profile or "taskbar_visible_monitors" in profile:
+            visible = self._resolve_taskbar_visible_devices(profile)
             self.config["taskbar_visible_displays"] = visible
+            self.config["taskbar_visible_monitors"] = profile.get("taskbar_visible_monitors", [])
             save_config(self.config)
             self._rebuild_taskbar_checks()
             changed = self._apply_taskbar_visibility(visible, update_status=False)
@@ -894,8 +929,10 @@ class DisplayManagerApp(tk.Tk):
         self._set_status(f"Deleted profile '{profile['name']}'.")
 
     def apply_taskbar_visibility(self):
-        visible = self._current_taskbar_visible_selection()
-        self.config["taskbar_visible_displays"] = visible
+        visible_entries = self._current_taskbar_visible_selection()
+        visibility = taskbar_visibility_payload(visible_entries)
+        visible = visibility["taskbar_visible_displays"]
+        self.config.update(visibility)
         save_config(self.config)
         changed = self._apply_taskbar_visibility(visible, update_status=False)
         self._schedule_taskbar_reapply(visible)
@@ -911,11 +948,17 @@ class DisplayManagerApp(tk.Tk):
             child.destroy()
         self.taskbar_vars = {}
         saved_visible = set(self.config.get("taskbar_visible_displays", []))
-        has_saved_visible = "taskbar_visible_displays" in self.config
+        saved_monitors = set(self.config.get("taskbar_visible_monitors", []))
+        has_saved_visible = "taskbar_visible_displays" in self.config or "taskbar_visible_monitors" in self.config
         for display in self.displays:
             if not display.active:
                 continue
-            var = tk.BooleanVar(value=(display.device_name in saved_visible) if has_saved_visible else True)
+            visible = (
+                display.device_name in saved_visible
+                or display.monitor_id in saved_monitors
+                or display.monitor_key in saved_monitors
+            )
+            var = tk.BooleanVar(value=visible if has_saved_visible else True)
             self.taskbar_vars[display.device_name] = var
             label = f"{display.device_name} ({display.width} x {display.height} at {display.x}, {display.y})"
             ttk.Checkbutton(self.taskbar_checks, text=label, variable=var).pack(anchor="w", pady=2)
@@ -929,10 +972,13 @@ class DisplayManagerApp(tk.Tk):
 
     def _current_taskbar_visible_selection(self):
         return [
-            display.device_name
+            display
             for display in self.displays
             if display.active and self.taskbar_vars.get(display.device_name, tk.BooleanVar(value=True)).get()
         ]
+
+    def _resolve_taskbar_visible_devices(self, source):
+        return [display.device_name for display in taskbar_visible_entries(source, self.displays)]
 
     def _apply_taskbar_visibility(self, visible, update_status=True):
         changed = self.taskbar_controller.apply_visibility(visible, self.displays)
@@ -946,7 +992,7 @@ class DisplayManagerApp(tk.Tk):
 
     def _taskbar_enforcement_loop(self):
         if self.enforce_taskbars_var.get() and "taskbar_visible_displays" in self.config:
-            self._apply_taskbar_visibility(self.config.get("taskbar_visible_displays", []), False)
+            self._apply_taskbar_visibility(self._resolve_taskbar_visible_devices(self.config), False)
         self.after(2500, self._taskbar_enforcement_loop)
 
     def _save_taskbar_enforcement_setting(self):

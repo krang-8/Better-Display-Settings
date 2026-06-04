@@ -13,7 +13,7 @@ A small Windows display manager prototype.
 - Registers optional global hotkeys while the app is running, such as `Ctrl+Alt+1`.
 - Shows or hides Windows taskbar windows per active display.
 - Retries and optionally keeps enforcing taskbar visibility while the app is open, which helps when Explorer recreates taskbar windows.
-- Persists the last manually applied taskbar visibility selection.
+- Persists the last manually applied taskbar visibility selection by display name and monitor identity.
 
 ## Run
 

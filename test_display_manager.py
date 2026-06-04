@@ -1,6 +1,13 @@
 import unittest
+from types import SimpleNamespace
 
-from display_manager import normalize_config, parse_hotkey, profile_summary, short_identity
+from display_manager import (
+    normalize_config,
+    parse_hotkey,
+    profile_summary,
+    short_identity,
+    taskbar_visibility_payload,
+)
 
 
 class DisplayManagerLogicTests(unittest.TestCase):
@@ -10,9 +17,10 @@ class DisplayManagerLogicTests(unittest.TestCase):
 
     def test_profile_summary_counts_applied_enabled_and_taskbar_displays(self):
         profile = {
-            "taskbar_visible_displays": ["DISPLAY1"],
+            "taskbar_visible_displays": [],
+            "taskbar_visible_monitors": ["MONITOR-1"],
             "displays": [
-                {"device_name": "DISPLAY1", "apply": True, "enabled": True},
+                {"device_name": "DISPLAY1", "monitor_id": "MONITOR-1", "apply": True, "enabled": True},
                 {"device_name": "DISPLAY2", "apply": True, "enabled": False},
                 {"device_name": "DISPLAY3", "apply": False, "enabled": True},
             ],
@@ -33,6 +41,7 @@ class DisplayManagerLogicTests(unittest.TestCase):
         display = config["profiles"][0]["displays"][0]
         self.assertEqual(config["profiles"][0]["hotkey"], "")
         self.assertEqual(config["profiles"][0]["taskbar_visible_displays"], [])
+        self.assertEqual(config["profiles"][0]["taskbar_visible_monitors"], [])
         self.assertTrue(display["apply"])
         self.assertFalse(display["enabled"])
         self.assertEqual(display["monitor_id"], "")
@@ -41,6 +50,17 @@ class DisplayManagerLogicTests(unittest.TestCase):
     def test_short_identity_uses_readable_tail(self):
         self.assertEqual(short_identity(""), "-")
         self.assertEqual(short_identity(r"MONITOR\\ACME123\\{long-device-instance}"), "{long-device-instance}")
+
+    def test_taskbar_visibility_payload_stores_device_and_monitor_identity(self):
+        payload = taskbar_visibility_payload(
+            [
+                SimpleNamespace(device_name="DISPLAY1", monitor_id="MONITOR-1", monitor_key="KEY-1"),
+                SimpleNamespace(device_name="DISPLAY2", monitor_id="", monitor_key="KEY-2"),
+            ]
+        )
+
+        self.assertEqual(payload["taskbar_visible_displays"], ["DISPLAY1", "DISPLAY2"])
+        self.assertEqual(payload["taskbar_visible_monitors"], ["MONITOR-1", "KEY-2"])
 
 
 if __name__ == "__main__":
