@@ -19,7 +19,9 @@ A small Windows display manager prototype.
 - Retries and optionally keeps enforcing taskbar visibility while the app is open, which helps when Explorer recreates taskbar windows.
 - Only changes taskbar windows when Windows reports they are in the wrong visible/hidden state, reducing needless Explorer refreshes.
 - Includes a taskbar diagnostics action that reports visible/hidden versus expected state per mapped display.
+- Includes a reset action that shows taskbars everywhere and turns taskbar enforcement off.
 - Persists the last manually applied taskbar visibility selection by display name and monitor identity.
+- Keeps a `display_profiles.json.bak` backup before config writes and falls back to it if the main config cannot be read.
 - Restores saved taskbar visibility shortly after app startup.
 - Uses scrollable tables for monitors and profiles.
 
@@ -57,6 +59,7 @@ In the profile editor:
 - If a hotkey shows as `unavailable`, another app or Windows has already reserved it.
 - Per-screen taskbar control works by hiding or showing Windows taskbar windows. Explorer may recreate those windows after display changes, sign-in, or restart, so the app retries after each taskbar update and can keep enforcing the selected layout while it stays open.
 - Use `Diagnose` if taskbar state looks wrong; it reports what Windows currently exposes for each taskbar window.
+- Use `Reset Taskbars` if taskbar state gets confusing; it shows all taskbars and disables enforcement so Windows returns to a safe baseline.
 - If a saved profile references a physical monitor that cannot be matched, the app warns and falls back to the saved Windows display name.
 - Display resolution is read from the active Windows display mode, not the DPI-scaled monitor rectangle.
 - Display profile application uses the built-in `ChangeDisplaySettingsExW` API. Resolution, position, color depth, refresh rate, primary display, and attach/detach requests are covered in this first version; some GPU/display-driver combinations may require a later `SetDisplayConfig` implementation for perfect enable/disable behavior.

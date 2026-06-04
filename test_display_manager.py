@@ -1,7 +1,9 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from display_manager import (
+    backup_config,
     DisplayController,
     hotkey_issue_messages,
     monitor_code,
@@ -139,6 +141,37 @@ class DisplayManagerLogicTests(unittest.TestCase):
         self.assertEqual(profile["displays"][0]["label"], "DISPLAY1 - DELL S2522HG")
         self.assertEqual(profile["displays"][0]["monitor_id"], "MONITOR-1")
         self.assertEqual(profile["taskbar_visible_monitors"], ["MONITOR-1"])
+
+    def test_backup_config_copies_existing_config(self):
+        class FakePath:
+            def __init__(self, exists, content=""):
+                self._exists = exists
+                self.content = content
+
+            def exists(self):
+                return self._exists
+
+            def read_text(self, encoding=None):
+                return self.content
+
+            def write_text(self, content, encoding=None):
+                self.content = content
+                return len(content)
+
+        source = FakePath(True, '{"profiles": []}')
+        backup = FakePath(False)
+        with patch("display_manager.CONFIG_PATH", source), patch("display_manager.CONFIG_BACKUP_PATH", backup):
+            self.assertTrue(backup_config())
+
+        self.assertEqual(backup.content, '{"profiles": []}')
+
+    def test_backup_config_skips_missing_config(self):
+        class MissingPath:
+            def exists(self):
+                return False
+
+        with patch("display_manager.CONFIG_PATH", MissingPath()):
+            self.assertFalse(backup_config())
 
     def test_unique_profile_name_adds_numeric_suffix(self):
         profiles = [{"name": "Triple Copy"}, {"name": "Triple Copy 2"}]

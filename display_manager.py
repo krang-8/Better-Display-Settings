@@ -12,6 +12,7 @@ from tkinter import messagebox, simpledialog, ttk
 
 APP_TITLE = "Better Display Settings"
 CONFIG_PATH = Path(__file__).with_name("display_profiles.json")
+CONFIG_BACKUP_PATH = Path(__file__).with_name("display_profiles.json.bak")
 
 CCHDEVICENAME = 32
 CCHFORMNAME = 32
@@ -542,7 +543,10 @@ def load_config():
     try:
         return normalize_config(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
-        return {"profiles": []}
+        try:
+            return normalize_config(json.loads(CONFIG_BACKUP_PATH.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            return {"profiles": []}
 
 
 def normalize_config(config):
@@ -560,7 +564,18 @@ def normalize_config(config):
 
 
 def save_config(config):
+    backup_config()
     CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+
+def backup_config():
+    if not CONFIG_PATH.exists():
+        return False
+    try:
+        CONFIG_BACKUP_PATH.write_text(CONFIG_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError:
+        return False
+    return True
 
 
 def display_to_profile_entry(display):
@@ -976,6 +991,9 @@ class DisplayManagerApp(tk.Tk):
         ttk.Button(taskbar_buttons, text="Show Taskbar Everywhere", command=self.show_taskbar_everywhere).pack(
             side=tk.LEFT
         )
+        ttk.Button(taskbar_buttons, text="Reset Taskbars", command=self.reset_taskbar_state).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
         ttk.Button(taskbar_buttons, text="Refresh Taskbars", command=self.refresh_taskbar_status).pack(
             side=tk.LEFT, padx=(6, 0)
         )
@@ -1172,6 +1190,19 @@ class DisplayManagerApp(tk.Tk):
         for var in self.taskbar_vars.values():
             var.set(True)
         self.apply_taskbar_visibility()
+
+    def reset_taskbar_state(self):
+        for var in self.taskbar_vars.values():
+            var.set(True)
+        visible_entries = [display for display in self.displays if display.active]
+        self.config.update(taskbar_visibility_payload(visible_entries))
+        self.config["enforce_taskbar_visibility"] = False
+        self.enforce_taskbars_var.set(False)
+        save_config(self.config)
+        visible = [display.device_name for display in visible_entries]
+        changed = self._apply_taskbar_visibility(visible, update_status=False)
+        self._schedule_taskbar_reapply(visible)
+        self._set_status(f"Reset taskbar state. Updated {changed} taskbar window(s); enforcement is off.")
 
     def _rebuild_taskbar_checks(self):
         for child in self.taskbar_checks.winfo_children():
