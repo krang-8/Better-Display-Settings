@@ -3,6 +3,7 @@ import json
 import queue
 import threading
 import tkinter as tk
+import winreg
 from ctypes import wintypes
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -210,7 +211,56 @@ class DisplayInfo:
     bits_per_pixel: int
 
 
+def monitor_code(monitor_id):
+    parts = (monitor_id or "").replace("/", "\\").split("\\")
+    return parts[1].upper() if len(parts) > 1 else ""
+
+
+def parse_edid_monitor_name(edid):
+    if not edid:
+        return ""
+    data = bytes(edid)
+    descriptor_start = 54
+    descriptor_size = 18
+    for offset in range(descriptor_start, min(len(data), 126), descriptor_size):
+        descriptor = data[offset : offset + descriptor_size]
+        if len(descriptor) < descriptor_size:
+            continue
+        if descriptor[:5] == b"\x00\x00\x00\xfc\x00":
+            raw_name = descriptor[5:18].split(b"\x0a", 1)[0].strip()
+            return raw_name.decode("ascii", errors="ignore").strip()
+    return ""
+
+
+def load_edid_monitor_names():
+    names = {}
+    root_path = r"SYSTEM\CurrentControlSet\Enum\DISPLAY"
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, root_path) as root:
+            for code_index in range(winreg.QueryInfoKey(root)[0]):
+                code = winreg.EnumKey(root, code_index)
+                with winreg.OpenKey(root, code) as code_key:
+                    for instance_index in range(winreg.QueryInfoKey(code_key)[0]):
+                        instance = winreg.EnumKey(code_key, instance_index)
+                        parameters_path = f"{code}\\{instance}\\Device Parameters"
+                        try:
+                            with winreg.OpenKey(root, parameters_path) as parameters_key:
+                                edid, _value_type = winreg.QueryValueEx(parameters_key, "EDID")
+                        except OSError:
+                            continue
+                        name = parse_edid_monitor_name(edid)
+                        if name:
+                            names[code.upper()] = name
+                            break
+    except OSError:
+        return names
+    return names
+
+
 class DisplayController:
+    def __init__(self):
+        self.edid_names = load_edid_monitor_names()
+
     def list_displays(self):
         displays = []
         seen_devices = set()
@@ -239,10 +289,10 @@ class DisplayController:
                     monitor_key=monitor_key,
                     active=True,
                     primary=bool(info.dwFlags & MONITORINFOF_PRIMARY),
-                    x=int(info.rcMonitor.left),
-                    y=int(info.rcMonitor.top),
-                    width=int(info.rcMonitor.right - info.rcMonitor.left),
-                    height=int(info.rcMonitor.bottom - info.rcMonitor.top),
+                    x=int(mode.dmPosition.x) if has_mode else int(info.rcMonitor.left),
+                    y=int(mode.dmPosition.y) if has_mode else int(info.rcMonitor.top),
+                    width=int(mode.dmPelsWidth) if has_mode else int(info.rcMonitor.right - info.rcMonitor.left),
+                    height=int(mode.dmPelsHeight) if has_mode else int(info.rcMonitor.bottom - info.rcMonitor.top),
                     frequency=int(mode.dmDisplayFrequency) if has_mode else 0,
                     bits_per_pixel=int(mode.dmBitsPerPel) if has_mode else 32,
                 )
@@ -256,7 +306,9 @@ class DisplayController:
         adapter = DISPLAY_DEVICEW()
         adapter.cb = ctypes.sizeof(adapter)
         if EnumDisplayDevicesW(device_name, 0, ctypes.byref(adapter), 0):
-            return adapter.DeviceString or device_name, adapter.DeviceID, adapter.DeviceKey
+            monitor_id = adapter.DeviceID
+            monitor_name = self.edid_names.get(monitor_code(monitor_id), adapter.DeviceString or device_name)
+            return monitor_name, monitor_id, adapter.DeviceKey
         return device_name, "", ""
 
     def apply_profile(self, profile):

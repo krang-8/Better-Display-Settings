@@ -6,6 +6,7 @@ A small Windows display manager prototype.
 
 - Detects connected display adapters and current resolution, refresh rate, position, and primary state.
 - Shows attached monitors in the main display list instead of raw GPU/display-adapter entries.
+- Uses EDID monitor names from Windows when available, such as `DELL S2522HG`, instead of generic PnP labels.
 - Stores monitor hardware identity fields in profiles so saved layouts can be matched back to the same physical monitor when Windows display numbers move around.
 - Saves the current monitor layout as named profiles.
 - Edits saved profiles, including display position, resolution, refresh rate, apply selection, enabled/disabled monitor state, hotkey, and taskbar choices.
@@ -47,6 +48,7 @@ In the profile editor:
 - Hotkeys only work while the app is open.
 - Per-screen taskbar control works by hiding or showing Windows taskbar windows. Explorer may recreate those windows after display changes, sign-in, or restart, so the app retries after each taskbar update and can keep enforcing the selected layout while it stays open.
 - If a saved profile references a physical monitor that cannot be matched, the app warns and falls back to the saved Windows display name.
+- Display resolution is read from the active Windows display mode, not the DPI-scaled monitor rectangle.
 - Display profile application uses the built-in `ChangeDisplaySettingsExW` API. Resolution, position, color depth, refresh rate, primary display, and attach/detach requests are covered in this first version; some GPU/display-driver combinations may require a later `SetDisplayConfig` implementation for perfect enable/disable behavior.
 - This repo is ready to push once an `origin` remote is configured. The current environment can push to a provided remote URL, but does not expose a GitHub repository creation tool.
 

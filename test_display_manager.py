@@ -3,8 +3,10 @@ from types import SimpleNamespace
 
 from display_manager import (
     DisplayController,
+    monitor_code,
     normalize_config,
     parse_hotkey,
+    parse_edid_monitor_name,
     profile_summary,
     short_identity,
     taskbar_visibility_payload,
@@ -15,6 +17,18 @@ class DisplayManagerLogicTests(unittest.TestCase):
     def test_parse_hotkey_accepts_common_combinations(self):
         self.assertEqual(parse_hotkey("Ctrl+Alt+1"), (0x0002 | 0x0001, ord("1")))
         self.assertEqual(parse_hotkey("Ctrl+Shift+F9"), (0x0002 | 0x0004, 0x78))
+
+    def test_monitor_code_extracts_hardware_code(self):
+        self.assertEqual(
+            monitor_code(r"MONITOR\DELA1C2\{4d36e96e-e325-11ce-bfc1-08002be10318}\0003"),
+            "DELA1C2",
+        )
+
+    def test_parse_edid_monitor_name_reads_descriptor(self):
+        edid = bytearray(128)
+        edid[54:72] = b"\x00\x00\x00\xfc\x00DELL S2522HG\n"
+
+        self.assertEqual(parse_edid_monitor_name(edid), "DELL S2522HG")
 
     def test_profile_summary_counts_applied_enabled_and_taskbar_displays(self):
         profile = {
