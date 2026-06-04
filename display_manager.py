@@ -827,6 +827,25 @@ def should_retry_taskbar_apply(result, missing):
     return bool(result.get("enabled_windows_setting") or missing)
 
 
+def taskbar_selection_summary(displays, visible_device_names):
+    active = [
+        display
+        for display in displays
+        if display_value(display, "active", False)
+    ]
+    visible = [
+        display
+        for display in active
+        if display_value(display, "device_name") in set(visible_device_names)
+    ]
+    hidden_count = max(len(active) - len(visible), 0)
+    return {
+        "visible": f"{len(visible)} shown",
+        "hidden": f"{hidden_count} hidden",
+        "total": f"{len(active)} active displays",
+    }
+
+
 def status_message(text, now=None):
     stamp = (now or datetime.now()).strftime("%H:%M:%S")
     return f"{stamp}  {text}"
@@ -1097,6 +1116,7 @@ class DisplayManagerApp(tk.Tk):
         self.metric_value_labels = {}
         self.profile_preview_vars = {}
         self.profile_preview_status_label = None
+        self.taskbar_summary_vars = {}
         self.hotkey_statuses = {}
         self.enforce_taskbars_var = tk.BooleanVar(
             value=bool(self.config.get("enforce_taskbar_visibility", True))
@@ -1141,6 +1161,9 @@ class DisplayManagerApp(tk.Tk):
         style.configure("PreviewGood.TLabel", background=COLORS["surface_alt"], foreground=COLORS["success"], font=("Segoe UI", 9, "bold"))
         style.configure("PreviewWarn.TLabel", background=COLORS["surface_alt"], foreground=COLORS["warning"], font=("Segoe UI", 9, "bold"))
         style.configure("PreviewBad.TLabel", background=COLORS["surface_alt"], foreground=COLORS["danger"], font=("Segoe UI", 9, "bold"))
+        style.configure("TaskbarCard.TFrame", background=COLORS["surface_alt"])
+        style.configure("TaskbarTitle.TLabel", background=COLORS["surface_alt"], foreground=COLORS["text"], font=("Segoe UI", 10, "bold"))
+        style.configure("TaskbarMeta.TLabel", background=COLORS["surface_alt"], foreground=COLORS["muted"], font=("Segoe UI", 9))
         style.configure("Status.TLabel", background=COLORS["surface"], foreground=COLORS["muted"], padding=(12, 8))
         style.configure(
             "Modern.TLabelframe",
@@ -1439,11 +1462,36 @@ class DisplayManagerApp(tk.Tk):
         taskbar_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         taskbar_frame.columnconfigure(0, weight=1)
 
+        taskbar_summary = ttk.Frame(taskbar_frame, padding=(14, 10), style="Preview.TFrame")
+        taskbar_summary.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        taskbar_summary.columnconfigure(3, weight=1)
+        for column, (key, label) in enumerate(
+            (
+                ("visible", "Shown"),
+                ("hidden", "Hidden"),
+                ("total", "Scope"),
+            )
+        ):
+            value = tk.StringVar(value="-")
+            self.taskbar_summary_vars[key] = value
+            ttk.Label(taskbar_summary, textvariable=value, style="PreviewTitle.TLabel").grid(
+                row=0,
+                column=column,
+                sticky="w",
+                padx=(0 if column == 0 else 22, 0),
+            )
+            ttk.Label(taskbar_summary, text=label, style="PreviewMeta.TLabel").grid(
+                row=1,
+                column=column,
+                sticky="w",
+                padx=(0 if column == 0 else 22, 0),
+            )
+
         self.taskbar_checks = ttk.Frame(taskbar_frame, style="Surface.TFrame")
-        self.taskbar_checks.grid(row=0, column=0, sticky="ew")
+        self.taskbar_checks.grid(row=1, column=0, sticky="ew")
 
         taskbar_buttons = ttk.Frame(taskbar_frame, style="Toolbar.TFrame")
-        taskbar_buttons.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        taskbar_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         ttk.Button(taskbar_buttons, text="Apply", command=self.apply_taskbar_visibility, style="Primary.TButton").pack(
             side=tk.LEFT, padx=(0, 6)
         )
@@ -1772,11 +1820,13 @@ class DisplayManagerApp(tk.Tk):
     def show_taskbar_everywhere(self):
         for var in self.taskbar_vars.values():
             var.set(True)
+        self._update_taskbar_selection_summary()
         self.apply_taskbar_visibility()
 
     def reset_taskbar_state(self):
         for var in self.taskbar_vars.values():
             var.set(True)
+        self._update_taskbar_selection_summary()
         visible_entries = [display for display in self.displays if display.active]
         self.config.update(taskbar_visibility_payload(visible_entries))
         self.config["enforce_taskbar_visibility"] = False
@@ -1794,7 +1844,8 @@ class DisplayManagerApp(tk.Tk):
         saved_visible = set(self.config.get("taskbar_visible_displays", []))
         saved_monitors = set(self.config.get("taskbar_visible_monitors", []))
         has_saved_visible = "taskbar_visible_displays" in self.config or "taskbar_visible_monitors" in self.config
-        for display in self.displays:
+        active_displays = [display for display in self.displays if display.active]
+        for index, display in enumerate(active_displays):
             if not display.active:
                 continue
             visible = (
@@ -1804,11 +1855,40 @@ class DisplayManagerApp(tk.Tk):
             )
             var = tk.BooleanVar(value=visible if has_saved_visible else True)
             self.taskbar_vars[display.device_name] = var
-            label = (
-                f"{display.label} ({display.width} x {display.height} at {display.x}, {display.y})"
-                f" [{short_identity(display.monitor_id)}]"
+            card = ttk.Frame(self.taskbar_checks, padding=(12, 10), style="TaskbarCard.TFrame")
+            card.grid(
+                row=index // 3,
+                column=index % 3,
+                sticky="ew",
+                padx=(0 if index % 3 == 0 else 8, 0),
+                pady=(0 if index < 3 else 8, 0),
             )
-            ttk.Checkbutton(self.taskbar_checks, text=label, variable=var).pack(anchor="w", pady=2)
+            self.taskbar_checks.columnconfigure(index % 3, weight=1)
+            ttk.Checkbutton(
+                card,
+                text="Show taskbar",
+                variable=var,
+                command=self._update_taskbar_selection_summary,
+            ).pack(anchor="w")
+            label = display.label.replace("\\\\.\\", "")
+            ttk.Label(card, text=label, style="TaskbarTitle.TLabel").pack(anchor="w", pady=(6, 0))
+            meta = (
+                f"{display.width} x {display.height} | "
+                f"{display.x}, {display.y} | {short_identity(display.monitor_id)}"
+            )
+            ttk.Label(card, text=meta, style="TaskbarMeta.TLabel").pack(anchor="w", pady=(2, 0))
+        self._update_taskbar_selection_summary()
+
+    def _update_taskbar_selection_summary(self):
+        selected = [
+            device_name
+            for device_name, variable in self.taskbar_vars.items()
+            if variable.get()
+        ]
+        summary = taskbar_selection_summary(self.displays, selected)
+        for key, value in summary.items():
+            if key in self.taskbar_summary_vars:
+                self.taskbar_summary_vars[key].set(value)
 
     def refresh_taskbar_status(self):
         taskbars = self.taskbar_controller.list_taskbars(self.displays)

@@ -25,6 +25,7 @@ from display_manager import (
     status_message,
     taskbar_apply_status,
     taskbar_diagnostic_parts,
+    taskbar_selection_summary,
     taskbar_visibility_payload,
     unique_profile_name,
 )
@@ -148,6 +149,22 @@ class DisplayManagerLogicTests(unittest.TestCase):
         self.assertFalse(should_retry_taskbar_apply({"changed": 1}, []))
         self.assertTrue(should_retry_taskbar_apply({"changed": 0, "enabled_windows_setting": True}, []))
         self.assertTrue(should_retry_taskbar_apply({"changed": 0}, ["DISPLAY2"]))
+
+    def test_taskbar_selection_summary_counts_active_visible_displays(self):
+        displays = [
+            SimpleNamespace(device_name="DISPLAY1", active=True),
+            SimpleNamespace(device_name="DISPLAY2", active=True),
+            SimpleNamespace(device_name="DISPLAY3", active=False),
+        ]
+
+        self.assertEqual(
+            taskbar_selection_summary(displays, ["DISPLAY1"]),
+            {
+                "visible": "1 shown",
+                "hidden": "1 hidden",
+                "total": "2 active displays",
+            },
+        )
 
     def test_status_message_adds_timestamp(self):
         self.assertEqual(

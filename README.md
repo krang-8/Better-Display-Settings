@@ -31,6 +31,7 @@ A small Windows display manager prototype.
 - Shows a visual monitor layout map above the display table.
 - Uses a modern dark dashboard layout with accent actions, status cards, colored state cues, and clearer profile/taskbar controls.
 - Shows a live profile preview card with hotkey health, monitor count, and taskbar summary.
+- Uses per-monitor taskbar cards with a live shown/hidden summary.
 
 ## Run
 
