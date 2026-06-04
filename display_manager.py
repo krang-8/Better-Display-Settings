@@ -1117,6 +1117,9 @@ class DisplayManagerApp(tk.Tk):
         self.profile_preview_vars = {}
         self.profile_preview_status_label = None
         self.taskbar_summary_vars = {}
+        self.status_text_var = tk.StringVar(value="")
+        self.status_badge_var = tk.StringVar(value="READY")
+        self.status_badge = None
         self.hotkey_statuses = {}
         self.enforce_taskbars_var = tk.BooleanVar(
             value=bool(self.config.get("enforce_taskbar_visibility", True))
@@ -1165,6 +1168,10 @@ class DisplayManagerApp(tk.Tk):
         style.configure("TaskbarTitle.TLabel", background=COLORS["surface_alt"], foreground=COLORS["text"], font=("Segoe UI", 10, "bold"))
         style.configure("TaskbarMeta.TLabel", background=COLORS["surface_alt"], foreground=COLORS["muted"], font=("Segoe UI", 9))
         style.configure("Status.TLabel", background=COLORS["surface"], foreground=COLORS["muted"], padding=(12, 8))
+        style.configure("StatusBar.TFrame", background=COLORS["surface"])
+        style.configure("StatusBadge.TLabel", background=COLORS["accent"], foreground="#ffffff", padding=(10, 5), font=("Segoe UI", 8, "bold"))
+        style.configure("StatusBadgeWarn.TLabel", background=COLORS["warning_bg"], foreground=COLORS["warning"], padding=(10, 5), font=("Segoe UI", 8, "bold"))
+        style.configure("StatusBadgeBad.TLabel", background=COLORS["danger_bg"], foreground=COLORS["danger"], padding=(10, 5), font=("Segoe UI", 8, "bold"))
         style.configure(
             "Modern.TLabelframe",
             background=COLORS["surface"],
@@ -1524,8 +1531,13 @@ class DisplayManagerApp(tk.Tk):
             command=self._save_taskbar_enforcement_setting,
         ).pack(side=tk.LEFT, padx=(12, 0))
 
-        self.status = ttk.Label(root, text="", anchor="w", style="Status.TLabel")
-        self.status.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        status_bar = ttk.Frame(root, padding=(12, 8), style="StatusBar.TFrame")
+        status_bar.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        status_bar.columnconfigure(1, weight=1)
+        self.status_badge = ttk.Label(status_bar, textvariable=self.status_badge_var, style="StatusBadge.TLabel")
+        self.status_badge.grid(row=0, column=0, sticky="w", padx=(0, 10))
+        self.status = ttk.Label(status_bar, textvariable=self.status_text_var, anchor="w", style="Status.TLabel")
+        self.status.grid(row=0, column=1, sticky="ew")
 
     def refresh_displays(self, repair_profiles=False):
         self.displays = self.display_controller.list_displays()
@@ -1642,6 +1654,13 @@ class DisplayManagerApp(tk.Tk):
             self._set_status("Profiles already match the current monitors.")
 
     def refresh_profiles(self):
+        selected_name = None
+        selection = self.profile_tree.selection()
+        if selection:
+            profiles = self.config.get("profiles", [])
+            selected_index = int(selection[0])
+            if 0 <= selected_index < len(profiles):
+                selected_name = profiles[selected_index].get("name")
         self.profile_tree.delete(*self.profile_tree.get_children())
         for index, profile in enumerate(self.config.get("profiles", [])):
             hotkey = profile.get("hotkey") or "no hotkey"
@@ -1663,6 +1682,7 @@ class DisplayManagerApp(tk.Tk):
             )
         self.hotkey_statuses = self.hotkeys.start(self.config.get("profiles", []))
         self._refresh_profile_hotkey_statuses()
+        self._restore_profile_selection(selected_name)
         self._update_profile_preview()
         self._update_summary()
         self._report_hotkey_registration_issues()
@@ -1677,6 +1697,22 @@ class DisplayManagerApp(tk.Tk):
             values[2] = status
             self.profile_tree.item(iid, values=values, tags=(hotkey_status_tag(status),))
         self._update_profile_preview()
+
+    def _restore_profile_selection(self, preferred_name=None):
+        profiles = self.config.get("profiles", [])
+        if not profiles:
+            return
+        target_index = 0
+        if preferred_name:
+            for index, profile in enumerate(profiles):
+                if profile.get("name") == preferred_name:
+                    target_index = index
+                    break
+        iid = str(target_index)
+        if self.profile_tree.exists(iid):
+            self.profile_tree.selection_set(iid)
+            self.profile_tree.focus(iid)
+            self.profile_tree.see(iid)
 
     def _update_profile_preview(self):
         profile = None
@@ -2021,7 +2057,20 @@ class DisplayManagerApp(tk.Tk):
         self.after(200, self._poll_hotkeys)
 
     def _set_status(self, text):
-        self.status.configure(text=status_message(text))
+        lowered = text.lower()
+        if any(word in lowered for word in ("warning", "issue", "missing", "invalid", "unavailable", "failed")):
+            badge = "CHECK"
+            style = "StatusBadgeWarn.TLabel"
+        elif any(word in lowered for word in ("deleted", "reset")):
+            badge = "NOTICE"
+            style = "StatusBadgeBad.TLabel"
+        else:
+            badge = "READY"
+            style = "StatusBadge.TLabel"
+        self.status_badge_var.set(badge)
+        if self.status_badge:
+            self.status_badge.configure(style=style)
+        self.status_text_var.set(status_message(text))
 
     def _on_close(self):
         self.hotkeys.stop()
