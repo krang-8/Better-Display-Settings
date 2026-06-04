@@ -6,7 +6,10 @@ from unittest.mock import patch
 from display_manager import (
     app_summary,
     backup_config,
+    display_state_label,
+    display_state_tag,
     DisplayController,
+    hotkey_status_tag,
     hotkey_issue_messages,
     monitor_code,
     normalize_config,
@@ -137,6 +140,18 @@ class DisplayManagerLogicTests(unittest.TestCase):
             app_summary(displays, [{"name": "Dual"}], True, False),
             "2 monitor(s) | 1 profile(s) | Windows multi-taskbar on | enforcement off",
         )
+
+    def test_display_state_helpers_prioritize_primary(self):
+        display = SimpleNamespace(primary=True, active=True)
+
+        self.assertEqual(display_state_label(display), "Primary")
+        self.assertEqual(display_state_tag(display), "primary")
+
+    def test_hotkey_status_tag_groups_visual_states(self):
+        self.assertEqual(hotkey_status_tag("registered"), "status_registered")
+        self.assertEqual(hotkey_status_tag("invalid"), "status_problem")
+        self.assertEqual(hotkey_status_tag("unavailable"), "status_problem")
+        self.assertEqual(hotkey_status_tag("not set"), "status_muted")
 
     def test_repair_profile_for_current_monitors_drops_stale_adapters_and_backfills_ids(self):
         profile = {

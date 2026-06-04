@@ -28,6 +28,9 @@ COLORS = {
     "success": "#39d98a",
     "warning": "#f6c85f",
     "danger": "#ff6b6b",
+    "danger_bg": "#3a2028",
+    "warning_bg": "#342b18",
+    "success_bg": "#183326",
 }
 
 CCHDEVICENAME = 32
@@ -823,6 +826,28 @@ def app_summary(displays, profiles, taskbar_setting_enabled, enforce_taskbars):
     )
 
 
+def display_state_label(display):
+    if display_value(display, "primary", False):
+        return "Primary"
+    if display_value(display, "active", False):
+        return "Active"
+    return "Inactive"
+
+
+def display_state_tag(display):
+    return display_state_label(display).lower()
+
+
+def hotkey_status_tag(status):
+    if status == "registered":
+        return "status_registered"
+    if status in {"invalid", "unavailable"}:
+        return "status_problem"
+    if status in {"not set", "pending"}:
+        return "status_muted"
+    return "status_default"
+
+
 def display_value(display, key, default=""):
     if isinstance(display, dict):
         return display.get(key, default)
@@ -1000,6 +1025,7 @@ class DisplayManagerApp(tk.Tk):
         self.taskbar_vars = {}
         self.taskbar_retry_jobs = []
         self.metric_vars = {}
+        self.metric_value_labels = {}
         self.hotkey_statuses = {}
         self.enforce_taskbars_var = tk.BooleanVar(
             value=bool(self.config.get("enforce_taskbar_visibility", True))
@@ -1035,6 +1061,8 @@ class DisplayManagerApp(tk.Tk):
         style.configure("Title.TLabel", background=COLORS["surface"], foreground=COLORS["text"], font=("Segoe UI", 20, "bold"))
         style.configure("Subtitle.TLabel", background=COLORS["surface"], foreground=COLORS["muted"], font=("Segoe UI", 10))
         style.configure("MetricValue.TLabel", background=COLORS["surface_alt"], foreground=COLORS["text"], font=("Segoe UI", 15, "bold"))
+        style.configure("MetricGood.TLabel", background=COLORS["surface_alt"], foreground=COLORS["success"], font=("Segoe UI", 15, "bold"))
+        style.configure("MetricWarn.TLabel", background=COLORS["surface_alt"], foreground=COLORS["warning"], font=("Segoe UI", 15, "bold"))
         style.configure("MetricLabel.TLabel", background=COLORS["surface_alt"], foreground=COLORS["muted"], font=("Segoe UI", 9))
         style.configure("Status.TLabel", background=COLORS["surface"], foreground=COLORS["muted"], padding=(12, 8))
         style.configure(
@@ -1120,7 +1148,7 @@ class DisplayManagerApp(tk.Tk):
             padding=(12, 7),
             borderwidth=0,
             relief="flat",
-            background="#3a2028",
+            background=COLORS["danger_bg"],
             foreground="#ffd7dc",
         )
         style.map("Danger.TButton", background=[("pressed", "#552530"), ("active", "#552530")])
@@ -1134,18 +1162,25 @@ class DisplayManagerApp(tk.Tk):
 
         header = ttk.Frame(root, padding=16, style="Hero.TFrame")
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
-        header.columnconfigure(0, weight=1)
+        header.columnconfigure(1, weight=1)
+        tk.Frame(header, bg=COLORS["accent"], width=5, height=46).grid(
+            row=0,
+            column=0,
+            rowspan=2,
+            sticky="nsw",
+            padx=(0, 12),
+        )
         heading = ttk.Label(header, text=APP_TITLE, style="Title.TLabel")
-        heading.grid(row=0, column=0, sticky="w")
+        heading.grid(row=0, column=1, sticky="w")
         self.summary = ttk.Label(
             header,
-            text="Profiles, hotkeys, monitor layouts, and per-screen taskbars.",
+            text="Ready",
             style="Subtitle.TLabel",
         )
-        self.summary.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.summary.grid(row=1, column=1, sticky="w", pady=(4, 0))
         ttk.Button(header, text="Refresh Displays", command=self.refresh_displays, style="Primary.TButton").grid(
             row=0,
-            column=1,
+            column=2,
             rowspan=2,
             sticky="e",
             padx=(16, 0),
@@ -1167,7 +1202,9 @@ class DisplayManagerApp(tk.Tk):
             card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
             value_var = tk.StringVar(value="-")
             self.metric_vars[key] = value_var
-            ttk.Label(card, textvariable=value_var, style="MetricValue.TLabel").pack(anchor="w")
+            value_label = ttk.Label(card, textvariable=value_var, style="MetricValue.TLabel")
+            value_label.pack(anchor="w")
+            self.metric_value_labels[key] = value_label
             ttk.Label(card, text=label, style="MetricLabel.TLabel").pack(anchor="w", pady=(2, 0))
 
         display_frame = ttk.LabelFrame(root, text="Displays", padding=12, style="Modern.TLabelframe")
@@ -1193,6 +1230,9 @@ class DisplayManagerApp(tk.Tk):
         display_scroll_x = ttk.Scrollbar(display_frame, orient=tk.HORIZONTAL, command=self.display_tree.xview)
         display_scroll_x.grid(row=1, column=0, sticky="ew")
         self.display_tree.configure(yscrollcommand=display_scroll_y.set, xscrollcommand=display_scroll_x.set)
+        self.display_tree.tag_configure("primary", foreground=COLORS["success"])
+        self.display_tree.tag_configure("active", foreground=COLORS["text"])
+        self.display_tree.tag_configure("inactive", foreground=COLORS["muted"])
 
         display_buttons = ttk.Frame(display_frame, style="Toolbar.TFrame")
         display_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
@@ -1229,6 +1269,9 @@ class DisplayManagerApp(tk.Tk):
         profile_scroll_x = ttk.Scrollbar(profile_frame, orient=tk.HORIZONTAL, command=self.profile_tree.xview)
         profile_scroll_x.grid(row=1, column=0, sticky="ew")
         self.profile_tree.configure(yscrollcommand=profile_scroll_y.set, xscrollcommand=profile_scroll_x.set)
+        self.profile_tree.tag_configure("status_registered", foreground=COLORS["success"])
+        self.profile_tree.tag_configure("status_problem", foreground=COLORS["danger"])
+        self.profile_tree.tag_configure("status_muted", foreground=COLORS["muted"])
 
         profile_buttons = ttk.Frame(profile_frame, style="Toolbar.TFrame")
         profile_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
@@ -1325,7 +1368,7 @@ class DisplayManagerApp(tk.Tk):
             repaired = 0
         self.display_tree.delete(*self.display_tree.get_children())
         for display in self.displays:
-            state = "Primary" if display.primary else "Active" if display.active else "Inactive"
+            state = display_state_label(display)
             self.display_tree.insert(
                 "",
                 tk.END,
@@ -1337,6 +1380,7 @@ class DisplayManagerApp(tk.Tk):
                     f"{display.frequency} Hz" if display.frequency else "-",
                     short_identity(display.monitor_id),
                 ),
+                tags=(display_state_tag(display),),
             )
         self._rebuild_taskbar_checks()
         self._update_summary()
@@ -1367,6 +1411,7 @@ class DisplayManagerApp(tk.Tk):
         self.profile_tree.delete(*self.profile_tree.get_children())
         for index, profile in enumerate(self.config.get("profiles", [])):
             hotkey = profile.get("hotkey") or "no hotkey"
+            hotkey_status = self.hotkey_statuses.get(profile["name"], "pending")
             summary = profile_summary(profile)
             self.profile_tree.insert(
                 "",
@@ -1375,11 +1420,12 @@ class DisplayManagerApp(tk.Tk):
                 values=(
                     profile["name"],
                     hotkey,
-                    self.hotkey_statuses.get(profile["name"], "pending"),
+                    hotkey_status,
                     summary["enabled"],
                     summary["disabled"],
                     summary["taskbars"],
                 ),
+                tags=(hotkey_status_tag(hotkey_status),),
             )
         self.hotkey_statuses = self.hotkeys.start(self.config.get("profiles", []))
         self._refresh_profile_hotkey_statuses()
@@ -1392,8 +1438,9 @@ class DisplayManagerApp(tk.Tk):
             if not self.profile_tree.exists(iid):
                 continue
             values = list(self.profile_tree.item(iid, "values"))
-            values[2] = self.hotkey_statuses.get(profile["name"], "not set")
-            self.profile_tree.item(iid, values=values)
+            status = self.hotkey_statuses.get(profile["name"], "not set")
+            values[2] = status
+            self.profile_tree.item(iid, values=values, tags=(hotkey_status_tag(status),))
 
     def _report_hotkey_registration_issues(self):
         issues = hotkey_issue_messages(self.config.get("profiles", []), self.hotkey_statuses)
@@ -1638,6 +1685,12 @@ class DisplayManagerApp(tk.Tk):
             self.metric_vars["profiles"].set(str(len(profiles)))
             self.metric_vars["taskbar"].set("On" if taskbar_setting_enabled else "Off")
             self.metric_vars["enforcement"].set("On" if enforce_taskbars else "Off")
+            self.metric_value_labels["taskbar"].configure(
+                style="MetricGood.TLabel" if taskbar_setting_enabled else "MetricWarn.TLabel"
+            )
+            self.metric_value_labels["enforcement"].configure(
+                style="MetricGood.TLabel" if enforce_taskbars else "MetricWarn.TLabel"
+            )
         self.summary.configure(
             text=app_summary(
                 self.displays,
