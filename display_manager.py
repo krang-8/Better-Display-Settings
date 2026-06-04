@@ -5,7 +5,7 @@ import threading
 import tkinter as tk
 import winreg
 from ctypes import wintypes
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, is_dataclass
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
@@ -564,9 +564,28 @@ def save_config(config):
 
 
 def display_to_profile_entry(display):
-    entry = asdict(display)
+    if is_dataclass(display):
+        entry = asdict(display)
+    else:
+        entry = {
+            key: display_value(display, key)
+            for key in (
+                "device_name",
+                "label",
+                "monitor_id",
+                "monitor_key",
+                "active",
+                "primary",
+                "x",
+                "y",
+                "width",
+                "height",
+                "frequency",
+                "bits_per_pixel",
+            )
+        }
     entry["apply"] = True
-    entry["enabled"] = display.active
+    entry["enabled"] = display_value(display, "active", True)
     return entry
 
 
@@ -604,6 +623,51 @@ def taskbar_visibility_payload(displays):
             if display_value(display, "monitor_id") or display_value(display, "monitor_key")
         ],
     }
+
+
+def repair_profile_for_current_monitors(profile, current_displays):
+    changed = False
+    current_by_device = {display.device_name: display for display in current_displays}
+    old_by_device = {
+        display.get("device_name"): display
+        for display in profile.get("displays", [])
+        if display.get("device_name")
+    }
+    repaired_displays = []
+
+    for current in current_displays:
+        old = old_by_device.get(current.device_name, {})
+        entry = display_to_profile_entry(current)
+        for key in ("apply", "enabled", "x", "y", "width", "height", "frequency", "bits_per_pixel", "primary"):
+            if key in old:
+                entry[key] = old[key]
+        repaired_displays.append(entry)
+        for key in ("label", "monitor_id", "monitor_key"):
+            if old.get(key) != entry.get(key):
+                changed = True
+
+    stale = [
+        display
+        for display in profile.get("displays", [])
+        if display.get("device_name") not in current_by_device
+    ]
+    if stale:
+        changed = True
+
+    if len(repaired_displays) != len(profile.get("displays", [])):
+        changed = True
+
+    visible_entries = taskbar_visible_entries(profile, repaired_displays)
+    visibility = taskbar_visibility_payload(visible_entries)
+    if profile.get("taskbar_visible_displays") != visibility["taskbar_visible_displays"]:
+        changed = True
+    if profile.get("taskbar_visible_monitors") != visibility["taskbar_visible_monitors"]:
+        changed = True
+
+    if changed:
+        profile["displays"] = repaired_displays
+        profile.update(visibility)
+    return changed
 
 
 def unique_profile_name(base_name, profiles):
@@ -812,7 +876,7 @@ class DisplayManagerApp(tk.Tk):
         )
 
         self._build_ui()
-        self.refresh_displays()
+        self.refresh_displays(repair_profiles=True)
         self.refresh_profiles()
         self.after(200, self._poll_hotkeys)
         self.after(750, self._reapply_saved_taskbar_visibility)
@@ -928,8 +992,12 @@ class DisplayManagerApp(tk.Tk):
         self.status = ttk.Label(root, text="", anchor="w")
         self.status.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
-    def refresh_displays(self):
+    def refresh_displays(self, repair_profiles=False):
         self.displays = self.display_controller.list_displays()
+        if repair_profiles:
+            repaired = self._repair_profiles_for_current_monitors()
+        else:
+            repaired = 0
         self.display_tree.delete(*self.display_tree.get_children())
         for display in self.displays:
             state = "Primary" if display.primary else "Active" if display.active else "Inactive"
@@ -947,6 +1015,17 @@ class DisplayManagerApp(tk.Tk):
             )
         self._rebuild_taskbar_checks()
         self.refresh_taskbar_status()
+        if repaired:
+            self._set_status(f"Repaired {repaired} saved profile(s) with current monitor identities.")
+
+    def _repair_profiles_for_current_monitors(self):
+        repaired = 0
+        for profile in self.config.get("profiles", []):
+            if repair_profile_for_current_monitors(profile, self.displays):
+                repaired += 1
+        if repaired:
+            save_config(self.config)
+        return repaired
 
     def refresh_profiles(self):
         self.profile_tree.delete(*self.profile_tree.get_children())

@@ -9,6 +9,7 @@ from display_manager import (
     parse_hotkey,
     parse_edid_monitor_name,
     profile_summary,
+    repair_profile_for_current_monitors,
     short_identity,
     taskbar_diagnostic_parts,
     taskbar_visibility_payload,
@@ -91,6 +92,53 @@ class DisplayManagerLogicTests(unittest.TestCase):
             taskbar_diagnostic_parts(taskbars, {"DISPLAY1"}),
             ["DISPLAY1: visible/show", "DISPLAY2: visible/hide", "unmapped: hidden/hide"],
         )
+
+    def test_repair_profile_for_current_monitors_drops_stale_adapters_and_backfills_ids(self):
+        profile = {
+            "displays": [
+                {"device_name": "DISPLAY1", "label": "Generic PnP Monitor", "enabled": True},
+                {"device_name": "DISPLAY2", "label": "Generic PnP Monitor", "enabled": True},
+                {"device_name": "DISPLAY4", "label": "AMD Radeon", "enabled": False, "width": 0, "height": 0},
+            ],
+            "taskbar_visible_displays": ["DISPLAY1"],
+            "taskbar_visible_monitors": [],
+        }
+        current = [
+            SimpleNamespace(
+                device_name="DISPLAY1",
+                label="DISPLAY1 - DELL S2522HG",
+                monitor_id="MONITOR-1",
+                monitor_key="KEY-1",
+                active=True,
+                primary=False,
+                x=0,
+                y=0,
+                width=1920,
+                height=1080,
+                frequency=240,
+                bits_per_pixel=32,
+            ),
+            SimpleNamespace(
+                device_name="DISPLAY2",
+                label="DISPLAY2 - MAG 275QF X30",
+                monitor_id="MONITOR-2",
+                monitor_key="KEY-2",
+                active=True,
+                primary=True,
+                x=1920,
+                y=0,
+                width=2560,
+                height=1440,
+                frequency=300,
+                bits_per_pixel=32,
+            ),
+        ]
+
+        self.assertTrue(repair_profile_for_current_monitors(profile, current))
+        self.assertEqual([display["device_name"] for display in profile["displays"]], ["DISPLAY1", "DISPLAY2"])
+        self.assertEqual(profile["displays"][0]["label"], "DISPLAY1 - DELL S2522HG")
+        self.assertEqual(profile["displays"][0]["monitor_id"], "MONITOR-1")
+        self.assertEqual(profile["taskbar_visible_monitors"], ["MONITOR-1"])
 
     def test_unique_profile_name_adds_numeric_suffix(self):
         profiles = [{"name": "Triple Copy"}, {"name": "Triple Copy 2"}]

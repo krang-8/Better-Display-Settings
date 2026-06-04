@@ -8,6 +8,7 @@ A small Windows display manager prototype.
 - Shows attached monitors in the main display list instead of raw GPU/display-adapter entries.
 - Uses EDID monitor names from Windows when available, such as `DELL S2522HG`, instead of generic PnP labels.
 - Stores monitor hardware identity fields in profiles so saved layouts can be matched back to the same physical monitor when Windows display numbers move around.
+- Repairs older saved profiles at startup by backfilling current monitor identities and removing stale zero-size adapter entries.
 - Saves the current monitor layout as named profiles.
 - Edits saved profiles, including display position, resolution, refresh rate, apply selection, enabled/disabled monitor state, hotkey, and taskbar choices.
 - Duplicates saved profiles so variants like dual/triple monitor layouts are quicker to create.
