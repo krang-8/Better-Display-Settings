@@ -15,6 +15,21 @@ APP_TITLE = "Better Display Settings"
 CONFIG_PATH = Path(__file__).with_name("display_profiles.json")
 CONFIG_BACKUP_PATH = Path(__file__).with_name("display_profiles.json.bak")
 
+COLORS = {
+    "bg": "#0e1117",
+    "surface": "#151a23",
+    "surface_alt": "#1d2430",
+    "border": "#2b3445",
+    "text": "#f4f7fb",
+    "muted": "#9aa7b8",
+    "accent": "#4f8cff",
+    "accent_hover": "#6ea0ff",
+    "accent_deep": "#2f6de0",
+    "success": "#39d98a",
+    "warning": "#f6c85f",
+    "danger": "#ff6b6b",
+}
+
 CCHDEVICENAME = 32
 CCHFORMNAME = 32
 
@@ -828,6 +843,7 @@ class ProfileEditorDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(True, True)
+        self.configure(bg=COLORS["bg"])
         self.result = None
         self.profile = json.loads(json.dumps(profile))
         self.rows = []
@@ -836,7 +852,7 @@ class ProfileEditorDialog(tk.Toplevel):
         self.wait_window(self)
 
     def _build_ui(self):
-        root = ttk.Frame(self, padding=12)
+        root = ttk.Frame(self, padding=16, style="App.TFrame")
         root.pack(fill=tk.BOTH, expand=True)
         root.columnconfigure(1, weight=1)
         root.rowconfigure(2, weight=1)
@@ -849,7 +865,7 @@ class ProfileEditorDialog(tk.Toplevel):
         self.hotkey_var = tk.StringVar(value=self.profile.get("hotkey", ""))
         ttk.Entry(root, textvariable=self.hotkey_var).grid(row=1, column=1, sticky="ew", pady=(0, 10))
 
-        table_frame = ttk.Frame(root)
+        table_frame = ttk.Frame(root, style="App.TFrame")
         table_frame.grid(row=2, column=0, columnspan=2, sticky="nsew")
         for index in range(9):
             table_frame.columnconfigure(index, weight=1 if index == 1 else 0)
@@ -909,10 +925,12 @@ class ProfileEditorDialog(tk.Toplevel):
                 }
             )
 
-        buttons = ttk.Frame(root)
+        buttons = ttk.Frame(root, style="App.TFrame")
         buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(12, 0))
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
-        ttk.Button(buttons, text="Save", command=self._save).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(buttons, text="Cancel", command=self.destroy, style="Secondary.TButton").pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Save", command=self._save, style="Primary.TButton").pack(
+            side=tk.RIGHT, padx=(0, 8)
+        )
 
     def _save(self):
         name = self.name_var.get().strip()
@@ -969,8 +987,9 @@ class DisplayManagerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1080x700")
-        self.minsize(980, 600)
+        self.geometry("1180x760")
+        self.minsize(1040, 660)
+        self.configure(bg=COLORS["bg"])
 
         self.display_controller = DisplayController()
         self.taskbar_controller = TaskbarController()
@@ -980,11 +999,13 @@ class DisplayManagerApp(tk.Tk):
         self.displays = []
         self.taskbar_vars = {}
         self.taskbar_retry_jobs = []
+        self.metric_vars = {}
         self.hotkey_statuses = {}
         self.enforce_taskbars_var = tk.BooleanVar(
             value=bool(self.config.get("enforce_taskbar_visibility", True))
         )
 
+        self._configure_style()
         self._build_ui()
         self.refresh_displays(repair_profiles=True)
         self.refresh_profiles()
@@ -992,23 +1013,165 @@ class DisplayManagerApp(tk.Tk):
         self.after(10000, self._taskbar_enforcement_loop)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _configure_style(self):
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        style.configure(
+            ".",
+            background=COLORS["bg"],
+            foreground=COLORS["text"],
+            fieldbackground=COLORS["surface"],
+            font=("Segoe UI", 10),
+        )
+        style.configure("App.TFrame", background=COLORS["bg"])
+        style.configure("Surface.TFrame", background=COLORS["surface"])
+        style.configure("Toolbar.TFrame", background=COLORS["surface"])
+        style.configure("Hero.TFrame", background=COLORS["surface"])
+        style.configure("Metric.TFrame", background=COLORS["surface_alt"])
+        style.configure("Title.TLabel", background=COLORS["surface"], foreground=COLORS["text"], font=("Segoe UI", 20, "bold"))
+        style.configure("Subtitle.TLabel", background=COLORS["surface"], foreground=COLORS["muted"], font=("Segoe UI", 10))
+        style.configure("MetricValue.TLabel", background=COLORS["surface_alt"], foreground=COLORS["text"], font=("Segoe UI", 15, "bold"))
+        style.configure("MetricLabel.TLabel", background=COLORS["surface_alt"], foreground=COLORS["muted"], font=("Segoe UI", 9))
+        style.configure("Status.TLabel", background=COLORS["surface"], foreground=COLORS["muted"], padding=(12, 8))
+        style.configure(
+            "Modern.TLabelframe",
+            background=COLORS["surface"],
+            bordercolor=COLORS["border"],
+            darkcolor=COLORS["border"],
+            lightcolor=COLORS["border"],
+            relief="solid",
+        )
+        style.configure(
+            "Modern.TLabelframe.Label",
+            background=COLORS["bg"],
+            foreground=COLORS["text"],
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.configure(
+            "Treeview",
+            background=COLORS["surface"],
+            fieldbackground=COLORS["surface"],
+            foreground=COLORS["text"],
+            borderwidth=0,
+            rowheight=30,
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=COLORS["surface_alt"],
+            foreground=COLORS["text"],
+            relief="flat",
+            font=("Segoe UI", 9, "bold"),
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", COLORS["accent_deep"])],
+            foreground=[("selected", "#ffffff")],
+        )
+        style.map("Treeview.Heading", background=[("active", COLORS["border"])])
+        style.configure("TCheckbutton", background=COLORS["surface"], foreground=COLORS["text"])
+        style.map(
+            "TCheckbutton",
+            background=[("active", COLORS["surface"])],
+            foreground=[("disabled", COLORS["muted"]), ("active", COLORS["text"])],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=COLORS["surface_alt"],
+            foreground=COLORS["text"],
+            insertcolor=COLORS["text"],
+            bordercolor=COLORS["border"],
+            lightcolor=COLORS["border"],
+            darkcolor=COLORS["border"],
+            padding=(6, 4),
+        )
+        style.configure("Modern.TButton", padding=(12, 7), borderwidth=0, relief="flat")
+        style.configure(
+            "Primary.TButton",
+            padding=(14, 8),
+            borderwidth=0,
+            relief="flat",
+            background=COLORS["accent"],
+            foreground="#ffffff",
+        )
+        style.map(
+            "Primary.TButton",
+            background=[("pressed", COLORS["accent_deep"]), ("active", COLORS["accent_hover"])],
+            foreground=[("disabled", COLORS["muted"])],
+        )
+        style.configure(
+            "Secondary.TButton",
+            padding=(12, 7),
+            borderwidth=0,
+            relief="flat",
+            background=COLORS["surface_alt"],
+            foreground=COLORS["text"],
+        )
+        style.map(
+            "Secondary.TButton",
+            background=[("pressed", COLORS["border"]), ("active", COLORS["border"])],
+            foreground=[("disabled", COLORS["muted"])],
+        )
+        style.configure(
+            "Danger.TButton",
+            padding=(12, 7),
+            borderwidth=0,
+            relief="flat",
+            background="#3a2028",
+            foreground="#ffd7dc",
+        )
+        style.map("Danger.TButton", background=[("pressed", "#552530"), ("active", "#552530")])
+
     def _build_ui(self):
-        root = ttk.Frame(self, padding=14)
+        root = ttk.Frame(self, padding=18, style="App.TFrame")
         root.pack(fill=tk.BOTH, expand=True)
         root.columnconfigure(0, weight=1)
         root.columnconfigure(1, weight=1)
-        root.rowconfigure(1, weight=1)
+        root.rowconfigure(2, weight=1)
 
-        header = ttk.Frame(root)
-        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        header = ttk.Frame(root, padding=16, style="Hero.TFrame")
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
         header.columnconfigure(0, weight=1)
-        heading = ttk.Label(header, text=APP_TITLE, font=("Segoe UI", 18, "bold"))
+        heading = ttk.Label(header, text=APP_TITLE, style="Title.TLabel")
         heading.grid(row=0, column=0, sticky="w")
-        self.summary = ttk.Label(header, text="", anchor="e")
-        self.summary.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        self.summary = ttk.Label(
+            header,
+            text="Profiles, hotkeys, monitor layouts, and per-screen taskbars.",
+            style="Subtitle.TLabel",
+        )
+        self.summary.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Button(header, text="Refresh Displays", command=self.refresh_displays, style="Primary.TButton").grid(
+            row=0,
+            column=1,
+            rowspan=2,
+            sticky="e",
+            padx=(16, 0),
+        )
 
-        display_frame = ttk.LabelFrame(root, text="Displays", padding=10)
-        display_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+        metrics = ttk.Frame(root, style="App.TFrame")
+        metrics.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 14))
+        for column in range(4):
+            metrics.columnconfigure(column, weight=1)
+        for column, (key, label) in enumerate(
+            (
+                ("monitors", "Monitors"),
+                ("profiles", "Profiles"),
+                ("taskbar", "Multi-taskbar"),
+                ("enforcement", "Enforcement"),
+            )
+        ):
+            card = ttk.Frame(metrics, padding=(14, 12), style="Metric.TFrame")
+            card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 8, 0))
+            value_var = tk.StringVar(value="-")
+            self.metric_vars[key] = value_var
+            ttk.Label(card, textvariable=value_var, style="MetricValue.TLabel").pack(anchor="w")
+            ttk.Label(card, text=label, style="MetricLabel.TLabel").pack(anchor="w", pady=(2, 0))
+
+        display_frame = ttk.LabelFrame(root, text="Displays", padding=12, style="Modern.TLabelframe")
+        display_frame.grid(row=2, column=0, sticky="nsew", padx=(0, 8))
         display_frame.rowconfigure(0, weight=1)
         display_frame.columnconfigure(0, weight=1)
 
@@ -1031,15 +1194,20 @@ class DisplayManagerApp(tk.Tk):
         display_scroll_x.grid(row=1, column=0, sticky="ew")
         self.display_tree.configure(yscrollcommand=display_scroll_y.set, xscrollcommand=display_scroll_x.set)
 
-        display_buttons = ttk.Frame(display_frame)
+        display_buttons = ttk.Frame(display_frame, style="Toolbar.TFrame")
         display_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(display_buttons, text="Refresh", command=self.refresh_displays).pack(
+        ttk.Button(display_buttons, text="Refresh", command=self.refresh_displays, style="Secondary.TButton").pack(
             side=tk.LEFT, padx=(0, 6)
         )
-        ttk.Button(display_buttons, text="Repair Profiles", command=self.repair_profiles_now).pack(side=tk.LEFT)
+        ttk.Button(
+            display_buttons,
+            text="Repair Profiles",
+            command=self.repair_profiles_now,
+            style="Secondary.TButton",
+        ).pack(side=tk.LEFT)
 
-        profile_frame = ttk.LabelFrame(root, text="Display Profiles", padding=10)
-        profile_frame.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
+        profile_frame = ttk.LabelFrame(root, text="Display Profiles", padding=12, style="Modern.TLabelframe")
+        profile_frame.grid(row=2, column=1, sticky="nsew", padx=(8, 0))
         profile_frame.rowconfigure(0, weight=1)
         profile_frame.columnconfigure(0, weight=1)
 
@@ -1062,44 +1230,81 @@ class DisplayManagerApp(tk.Tk):
         profile_scroll_x.grid(row=1, column=0, sticky="ew")
         self.profile_tree.configure(yscrollcommand=profile_scroll_y.set, xscrollcommand=profile_scroll_x.set)
 
-        profile_buttons = ttk.Frame(profile_frame)
+        profile_buttons = ttk.Frame(profile_frame, style="Toolbar.TFrame")
         profile_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(profile_buttons, text="Save Current As...", command=self.save_current_profile).pack(
+        ttk.Button(
+            profile_buttons,
+            text="Save Current As...",
+            command=self.save_current_profile,
+            style="Primary.TButton",
+        ).pack(
             side=tk.LEFT, padx=(0, 6)
         )
-        ttk.Button(profile_buttons, text="Apply Selected", command=self.apply_selected_profile).pack(
+        ttk.Button(
+            profile_buttons,
+            text="Apply Selected",
+            command=self.apply_selected_profile,
+            style="Primary.TButton",
+        ).pack(
             side=tk.LEFT, padx=(0, 6)
         )
-        ttk.Button(profile_buttons, text="Edit Profile", command=self.edit_selected_profile).pack(
+        ttk.Button(
+            profile_buttons,
+            text="Edit",
+            command=self.edit_selected_profile,
+            style="Secondary.TButton",
+        ).pack(
             side=tk.LEFT, padx=(0, 6)
         )
-        ttk.Button(profile_buttons, text="Duplicate", command=self.duplicate_selected_profile).pack(
+        ttk.Button(
+            profile_buttons,
+            text="Duplicate",
+            command=self.duplicate_selected_profile,
+            style="Secondary.TButton",
+        ).pack(
             side=tk.LEFT, padx=(0, 6)
         )
-        ttk.Button(profile_buttons, text="Delete", command=self.delete_selected_profile).pack(side=tk.LEFT)
+        ttk.Button(profile_buttons, text="Delete", command=self.delete_selected_profile, style="Danger.TButton").pack(
+            side=tk.LEFT
+        )
 
-        taskbar_frame = ttk.LabelFrame(root, text="Taskbar Visibility Per Display", padding=10)
-        taskbar_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        taskbar_frame = ttk.LabelFrame(
+            root,
+            text="Taskbar Visibility Per Display",
+            padding=12,
+            style="Modern.TLabelframe",
+        )
+        taskbar_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         taskbar_frame.columnconfigure(0, weight=1)
 
-        self.taskbar_checks = ttk.Frame(taskbar_frame)
+        self.taskbar_checks = ttk.Frame(taskbar_frame, style="Surface.TFrame")
         self.taskbar_checks.grid(row=0, column=0, sticky="ew")
 
-        taskbar_buttons = ttk.Frame(taskbar_frame)
+        taskbar_buttons = ttk.Frame(taskbar_frame, style="Toolbar.TFrame")
         taskbar_buttons.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(taskbar_buttons, text="Apply", command=self.apply_taskbar_visibility).pack(
+        ttk.Button(taskbar_buttons, text="Apply", command=self.apply_taskbar_visibility, style="Primary.TButton").pack(
             side=tk.LEFT, padx=(0, 6)
         )
-        ttk.Button(taskbar_buttons, text="Show All", command=self.show_taskbar_everywhere).pack(
+        ttk.Button(
+            taskbar_buttons,
+            text="Show All",
+            command=self.show_taskbar_everywhere,
+            style="Secondary.TButton",
+        ).pack(
             side=tk.LEFT, padx=(6, 0)
         )
-        ttk.Button(taskbar_buttons, text="Reset", command=self.reset_taskbar_state).pack(
+        ttk.Button(taskbar_buttons, text="Reset", command=self.reset_taskbar_state, style="Danger.TButton").pack(
             side=tk.LEFT, padx=(6, 0)
         )
-        ttk.Button(taskbar_buttons, text="Refresh", command=self.refresh_taskbar_status).pack(
+        ttk.Button(
+            taskbar_buttons,
+            text="Refresh",
+            command=self.refresh_taskbar_status,
+            style="Secondary.TButton",
+        ).pack(
             side=tk.LEFT, padx=(6, 0)
         )
-        ttk.Button(taskbar_buttons, text="Diagnose", command=self.diagnose_taskbars).pack(
+        ttk.Button(taskbar_buttons, text="Diagnose", command=self.diagnose_taskbars, style="Secondary.TButton").pack(
             side=tk.LEFT, padx=(6, 0)
         )
         ttk.Checkbutton(
@@ -1109,8 +1314,8 @@ class DisplayManagerApp(tk.Tk):
             command=self._save_taskbar_enforcement_setting,
         ).pack(side=tk.LEFT, padx=(12, 0))
 
-        self.status = ttk.Label(root, text="", anchor="w")
-        self.status.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.status = ttk.Label(root, text="", anchor="w", style="Status.TLabel")
+        self.status.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
 
     def refresh_displays(self, repair_profiles=False):
         self.displays = self.display_controller.list_displays()
@@ -1424,12 +1629,21 @@ class DisplayManagerApp(tk.Tk):
         self._set_status(f"Taskbar enforcement is {state}.")
 
     def _update_summary(self):
+        taskbar_setting_enabled = self.taskbar_controller.is_multi_taskbar_enabled()
+        enforce_taskbars = self.enforce_taskbars_var.get()
+        active_displays = [display for display in self.displays if display.active]
+        profiles = self.config.get("profiles", [])
+        if self.metric_vars:
+            self.metric_vars["monitors"].set(str(len(active_displays)))
+            self.metric_vars["profiles"].set(str(len(profiles)))
+            self.metric_vars["taskbar"].set("On" if taskbar_setting_enabled else "Off")
+            self.metric_vars["enforcement"].set("On" if enforce_taskbars else "Off")
         self.summary.configure(
             text=app_summary(
                 self.displays,
-                self.config.get("profiles", []),
-                self.taskbar_controller.is_multi_taskbar_enabled(),
-                self.enforce_taskbars_var.get(),
+                profiles,
+                taskbar_setting_enabled,
+                enforce_taskbars,
             )
         )
 
