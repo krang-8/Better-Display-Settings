@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from display_manager import (
     DisplayController,
+    hotkey_issue_messages,
     monitor_code,
     normalize_config,
     parse_hotkey,
@@ -83,6 +84,15 @@ class DisplayManagerLogicTests(unittest.TestCase):
 
         self.assertEqual(unique_profile_name("Triple Copy", profiles), "Triple Copy 3")
         self.assertEqual(unique_profile_name("Dual Copy", profiles), "Dual Copy")
+
+    def test_hotkey_issue_messages_reports_invalid_and_unavailable(self):
+        profiles = [{"name": "Dual"}, {"name": "Triple"}, {"name": "TV"}]
+        statuses = {"Dual": "registered", "Triple": "invalid", "TV": "unavailable"}
+
+        self.assertEqual(
+            hotkey_issue_messages(profiles, statuses),
+            ["Triple: invalid", "TV: unavailable"],
+        )
 
     def test_resolve_device_name_reports_identity_match(self):
         controller = DisplayController()

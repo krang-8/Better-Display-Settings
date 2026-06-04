@@ -438,6 +438,7 @@ class HotkeyManager:
         self.thread = None
         self.thread_id = None
         self.hotkeys = {}
+        self.statuses = {}
         self.ready = threading.Event()
 
     def start(self, profiles):
@@ -446,6 +447,7 @@ class HotkeyManager:
         self.thread = threading.Thread(target=self._run, args=(profiles,), daemon=True)
         self.thread.start()
         self.ready.wait(timeout=2)
+        return dict(self.statuses)
 
     def stop(self):
         if self.thread and self.thread.is_alive() and self.thread_id:
@@ -454,21 +456,30 @@ class HotkeyManager:
         self.thread = None
         self.thread_id = None
         self.hotkeys = {}
+        self.statuses = {}
 
     def _run(self, profiles):
         self.thread_id = GetCurrentThreadId()
         registered = []
         hotkey_id = 100
         for profile in profiles:
+            profile_name = profile.get("name", "")
             hotkey = profile.get("hotkey", "").strip()
+            if not hotkey:
+                self.statuses[profile_name] = "not set"
+                continue
             parsed = parse_hotkey(hotkey)
             if not parsed:
+                self.statuses[profile_name] = "invalid"
                 continue
             modifiers, vk = parsed
             if RegisterHotKey(None, hotkey_id, modifiers, vk):
-                self.hotkeys[hotkey_id] = profile["name"]
+                self.hotkeys[hotkey_id] = profile_name
+                self.statuses[profile_name] = "registered"
                 registered.append(hotkey_id)
                 hotkey_id += 1
+            else:
+                self.statuses[profile_name] = "unavailable"
 
         self.ready.set()
         msg = MSG()
@@ -596,6 +607,14 @@ def unique_profile_name(base_name, profiles):
     while f"{base_name} {suffix}" in existing:
         suffix += 1
     return f"{base_name} {suffix}"
+
+
+def hotkey_issue_messages(profiles, statuses):
+    return [
+        f"{profile['name']}: {statuses.get(profile['name'])}"
+        for profile in profiles
+        if statuses.get(profile["name"]) in {"invalid", "unavailable"}
+    ]
 
 
 def display_value(display, key, default=""):
@@ -769,6 +788,7 @@ class DisplayManagerApp(tk.Tk):
         self.config = load_config()
         self.displays = []
         self.taskbar_vars = {}
+        self.hotkey_statuses = {}
         self.enforce_taskbars_var = tk.BooleanVar(
             value=bool(self.config.get("enforce_taskbar_visibility", True))
         )
@@ -824,11 +844,12 @@ class DisplayManagerApp(tk.Tk):
         profile_frame.rowconfigure(0, weight=1)
         profile_frame.columnconfigure(0, weight=1)
 
-        profile_columns = ("name", "hotkey", "enabled", "disabled", "taskbars")
+        profile_columns = ("name", "hotkey", "hotkey_status", "enabled", "disabled", "taskbars")
         self.profile_tree = ttk.Treeview(profile_frame, columns=profile_columns, show="headings", height=10)
         for column, width in {
             "name": 170,
             "hotkey": 110,
+            "hotkey_status": 100,
             "enabled": 70,
             "disabled": 70,
             "taskbars": 90,
@@ -918,12 +939,29 @@ class DisplayManagerApp(tk.Tk):
                 values=(
                     profile["name"],
                     hotkey,
+                    self.hotkey_statuses.get(profile["name"], "pending"),
                     summary["enabled"],
                     summary["disabled"],
                     summary["taskbars"],
                 ),
             )
-        self.hotkeys.start(self.config.get("profiles", []))
+        self.hotkey_statuses = self.hotkeys.start(self.config.get("profiles", []))
+        self._refresh_profile_hotkey_statuses()
+        self._report_hotkey_registration_issues()
+
+    def _refresh_profile_hotkey_statuses(self):
+        for index, profile in enumerate(self.config.get("profiles", [])):
+            iid = str(index)
+            if not self.profile_tree.exists(iid):
+                continue
+            values = list(self.profile_tree.item(iid, "values"))
+            values[2] = self.hotkey_statuses.get(profile["name"], "not set")
+            self.profile_tree.item(iid, values=values)
+
+    def _report_hotkey_registration_issues(self):
+        issues = hotkey_issue_messages(self.config.get("profiles", []), self.hotkey_statuses)
+        if issues:
+            self._set_status(f"Hotkey issue - {'; '.join(issues[:3])}")
 
     def save_current_profile(self):
         name = simpledialog.askstring("Save Profile", "Profile name:", parent=self)

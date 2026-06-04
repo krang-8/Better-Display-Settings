@@ -13,6 +13,7 @@ A small Windows display manager prototype.
 - Duplicates saved profiles so variants like dual/triple monitor layouts are quicker to create.
 - Applies saved profiles with Windows display APIs.
 - Registers optional global hotkeys while the app is running, such as `Ctrl+Alt+1`.
+- Shows whether each profile hotkey is registered, missing, invalid, or unavailable because Windows rejected it.
 - Shows or hides Windows taskbar windows per active display.
 - Retries and optionally keeps enforcing taskbar visibility while the app is open, which helps when Explorer recreates taskbar windows.
 - Persists the last manually applied taskbar visibility selection by display name and monitor identity.
@@ -50,6 +51,7 @@ In the profile editor:
 ## Notes
 
 - Hotkeys only work while the app is open.
+- If a hotkey shows as `unavailable`, another app or Windows has already reserved it.
 - Per-screen taskbar control works by hiding or showing Windows taskbar windows. Explorer may recreate those windows after display changes, sign-in, or restart, so the app retries after each taskbar update and can keep enforcing the selected layout while it stays open.
 - If a saved profile references a physical monitor that cannot be matched, the app warns and falls back to the saved Windows display name.
 - Display resolution is read from the active Windows display mode, not the DPI-scaled monitor rectangle.
