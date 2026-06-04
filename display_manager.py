@@ -848,6 +848,58 @@ def hotkey_status_tag(status):
     return "status_default"
 
 
+def display_layout_bounds(displays):
+    active = [
+        display
+        for display in displays
+        if display_value(display, "active", False)
+        and display_value(display, "width", 0) > 0
+        and display_value(display, "height", 0) > 0
+    ]
+    if not active:
+        return None
+    return (
+        min(display_value(display, "x", 0) for display in active),
+        min(display_value(display, "y", 0) for display in active),
+        max(display_value(display, "x", 0) + display_value(display, "width", 0) for display in active),
+        max(display_value(display, "y", 0) + display_value(display, "height", 0) for display in active),
+    )
+
+
+def display_map_rectangles(displays, canvas_width, canvas_height, padding=16):
+    bounds = display_layout_bounds(displays)
+    if not bounds:
+        return []
+    min_x, min_y, max_x, max_y = bounds
+    layout_width = max(max_x - min_x, 1)
+    layout_height = max(max_y - min_y, 1)
+    available_width = max(canvas_width - padding * 2, 1)
+    available_height = max(canvas_height - padding * 2, 1)
+    scale = min(available_width / layout_width, available_height / layout_height)
+    offset_x = (canvas_width - layout_width * scale) / 2
+    offset_y = (canvas_height - layout_height * scale) / 2
+    rectangles = []
+    for display in displays:
+        if not display_value(display, "active", False):
+            continue
+        width = display_value(display, "width", 0)
+        height = display_value(display, "height", 0)
+        if width <= 0 or height <= 0:
+            continue
+        x = display_value(display, "x", 0)
+        y = display_value(display, "y", 0)
+        rectangles.append(
+            {
+                "display": display,
+                "x1": round(offset_x + (x - min_x) * scale),
+                "y1": round(offset_y + (y - min_y) * scale),
+                "x2": round(offset_x + (x - min_x + width) * scale),
+                "y2": round(offset_y + (y - min_y + height) * scale),
+            }
+        )
+    return rectangles
+
+
 def display_value(display, key, default=""):
     if isinstance(display, dict):
         return display.get(key, default)
@@ -1209,8 +1261,19 @@ class DisplayManagerApp(tk.Tk):
 
         display_frame = ttk.LabelFrame(root, text="Displays", padding=12, style="Modern.TLabelframe")
         display_frame.grid(row=2, column=0, sticky="nsew", padx=(0, 8))
-        display_frame.rowconfigure(0, weight=1)
+        display_frame.rowconfigure(1, weight=1)
         display_frame.columnconfigure(0, weight=1)
+
+        self.display_map = tk.Canvas(
+            display_frame,
+            height=150,
+            bg=COLORS["surface_alt"],
+            highlightbackground=COLORS["border"],
+            highlightthickness=1,
+            bd=0,
+        )
+        self.display_map.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        self.display_map.bind("<Configure>", lambda _event: self._draw_display_map())
 
         columns = ("monitor", "state", "position", "resolution", "refresh", "identity")
         self.display_tree = ttk.Treeview(display_frame, columns=columns, show="headings", height=10)
@@ -1224,18 +1287,18 @@ class DisplayManagerApp(tk.Tk):
         }.items():
             self.display_tree.heading(column, text=column.title())
             self.display_tree.column(column, width=width, anchor="w")
-        self.display_tree.grid(row=0, column=0, sticky="nsew")
+        self.display_tree.grid(row=1, column=0, sticky="nsew")
         display_scroll_y = ttk.Scrollbar(display_frame, orient=tk.VERTICAL, command=self.display_tree.yview)
-        display_scroll_y.grid(row=0, column=1, sticky="ns")
+        display_scroll_y.grid(row=1, column=1, sticky="ns")
         display_scroll_x = ttk.Scrollbar(display_frame, orient=tk.HORIZONTAL, command=self.display_tree.xview)
-        display_scroll_x.grid(row=1, column=0, sticky="ew")
+        display_scroll_x.grid(row=2, column=0, sticky="ew")
         self.display_tree.configure(yscrollcommand=display_scroll_y.set, xscrollcommand=display_scroll_x.set)
         self.display_tree.tag_configure("primary", foreground=COLORS["success"])
         self.display_tree.tag_configure("active", foreground=COLORS["text"])
         self.display_tree.tag_configure("inactive", foreground=COLORS["muted"])
 
         display_buttons = ttk.Frame(display_frame, style="Toolbar.TFrame")
-        display_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        display_buttons.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         ttk.Button(display_buttons, text="Refresh", command=self.refresh_displays, style="Secondary.TButton").pack(
             side=tk.LEFT, padx=(0, 6)
         )
@@ -1383,11 +1446,78 @@ class DisplayManagerApp(tk.Tk):
                 tags=(display_state_tag(display),),
             )
         self._rebuild_taskbar_checks()
+        self._draw_display_map()
         self._update_summary()
         if repaired:
             self._set_status(f"Repaired {repaired} saved profile(s) with current monitor identities.")
         else:
             self._set_status(f"Refreshed {len(self.displays)} monitor(s).")
+
+    def _draw_display_map(self):
+        if not hasattr(self, "display_map"):
+            return
+        canvas = self.display_map
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 420)
+        height = max(canvas.winfo_height(), 150)
+        canvas.create_rectangle(0, 0, width, height, fill=COLORS["surface_alt"], outline="")
+
+        rectangles = display_map_rectangles(self.displays, width, height, padding=18)
+        if not rectangles:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text="No active monitor layout detected",
+                fill=COLORS["muted"],
+                font=("Segoe UI", 10, "bold"),
+            )
+            return
+
+        for item in rectangles:
+            display = item["display"]
+            tag = display_state_tag(display)
+            fill = COLORS["success_bg"] if tag == "primary" else COLORS["surface"]
+            outline = COLORS["success"] if tag == "primary" else COLORS["accent"]
+            label = display_value(display, "label", display_value(display, "device_name", "Display"))
+            label = label.replace("\\\\.\\", "")
+            resolution = f"{display_value(display, 'width', 0)} x {display_value(display, 'height', 0)}"
+            x1, y1, x2, y2 = item["x1"], item["y1"], item["x2"], item["y2"]
+            canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=outline, width=2)
+            canvas.create_text(
+                x1 + 10,
+                y1 + 10,
+                text=label[:34],
+                fill=COLORS["text"],
+                anchor="nw",
+                font=("Segoe UI", 9, "bold"),
+            )
+            canvas.create_text(
+                x1 + 10,
+                y1 + 30,
+                text=f"{display_state_label(display)} | {resolution}",
+                fill=COLORS["muted"],
+                anchor="nw",
+                font=("Segoe UI", 8),
+            )
+            if tag == "primary":
+                badge_width = 58
+                badge_x = max(x1 + 8, x2 - badge_width - 8)
+                badge_y = max(y1 + 8, y2 - 26)
+                canvas.create_rectangle(
+                    badge_x,
+                    badge_y,
+                    badge_x + badge_width,
+                    badge_y + 18,
+                    fill=COLORS["success"],
+                    outline="",
+                )
+                canvas.create_text(
+                    badge_x + badge_width / 2,
+                    badge_y + 9,
+                    text="PRIMARY",
+                    fill=COLORS["bg"],
+                    font=("Segoe UI", 7, "bold"),
+                )
 
     def _repair_profiles_for_current_monitors(self):
         repaired = 0

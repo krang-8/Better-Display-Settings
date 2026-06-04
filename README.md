@@ -28,6 +28,7 @@ A small Windows display manager prototype.
 - Keeps a `display_profiles.json.bak` backup before config writes and falls back to it if the main config cannot be read.
 - Restores saved taskbar visibility shortly after app startup.
 - Uses scrollable tables for monitors and profiles.
+- Shows a visual monitor layout map above the display table.
 - Uses a modern dark dashboard layout with accent actions, status cards, colored state cues, and clearer profile/taskbar controls.
 
 ## Run

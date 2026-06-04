@@ -6,6 +6,8 @@ from unittest.mock import patch
 from display_manager import (
     app_summary,
     backup_config,
+    display_layout_bounds,
+    display_map_rectangles,
     display_state_label,
     display_state_tag,
     DisplayController,
@@ -152,6 +154,29 @@ class DisplayManagerLogicTests(unittest.TestCase):
         self.assertEqual(hotkey_status_tag("invalid"), "status_problem")
         self.assertEqual(hotkey_status_tag("unavailable"), "status_problem")
         self.assertEqual(hotkey_status_tag("not set"), "status_muted")
+
+    def test_display_layout_bounds_uses_active_monitor_extents(self):
+        displays = [
+            SimpleNamespace(active=True, x=-1920, y=0, width=1920, height=1080),
+            SimpleNamespace(active=True, x=0, y=0, width=2560, height=1440),
+            SimpleNamespace(active=False, x=2560, y=0, width=3840, height=2160),
+        ]
+
+        self.assertEqual(display_layout_bounds(displays), (-1920, 0, 2560, 1440))
+
+    def test_display_map_rectangles_center_scaled_layout(self):
+        displays = [
+            SimpleNamespace(active=True, x=0, y=0, width=100, height=100),
+            SimpleNamespace(active=True, x=100, y=0, width=100, height=100),
+        ]
+
+        rectangles = display_map_rectangles(displays, 240, 140, padding=20)
+
+        self.assertEqual(rectangles[0]["x1"], 20)
+        self.assertEqual(rectangles[0]["x2"], 120)
+        self.assertEqual(rectangles[1]["x1"], 120)
+        self.assertEqual(rectangles[1]["x2"], 220)
+        self.assertEqual(rectangles[0]["y1"], 20)
 
     def test_repair_profile_for_current_monitors_drops_stale_adapters_and_backfills_ids(self):
         profile = {
