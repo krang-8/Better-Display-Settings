@@ -6,6 +6,7 @@ A small Windows display manager prototype.
 
 - Detects connected display adapters and current resolution, refresh rate, position, and primary state.
 - Shows attached monitors in the main display list instead of raw GPU/display-adapter entries.
+- Stores monitor hardware identity fields in profiles so saved layouts can be matched back to the same physical monitor when Windows display numbers move around.
 - Saves the current monitor layout as named profiles.
 - Edits saved profiles, including display position, resolution, refresh rate, apply selection, enabled/disabled monitor state, hotkey, and taskbar choices.
 - Applies saved profiles with Windows display APIs.
@@ -37,6 +38,7 @@ In the profile editor:
 - `Apply` controls whether the profile changes that display at all.
 - `Enabled` controls whether the profile tries to attach or detach that display.
 - `Taskbar` controls whether that display should show a taskbar after the profile is applied.
+- The `Identity` column is a short hardware/device hint used for profile matching.
 
 ## Notes
 

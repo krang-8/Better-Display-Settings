@@ -198,6 +198,8 @@ VkKeyScanW.restype = wintypes.SHORT
 class DisplayInfo:
     device_name: str
     label: str
+    monitor_id: str
+    monitor_key: str
     active: bool
     primary: bool
     x: int
@@ -227,11 +229,14 @@ class DisplayController:
             mode = DEVMODEW()
             mode.dmSize = ctypes.sizeof(mode)
             has_mode = EnumDisplaySettingsW(device_name, ENUM_CURRENT_SETTINGS, ctypes.byref(mode))
+            monitor_name, monitor_id, monitor_key = self._monitor_metadata(device_name)
 
             displays.append(
                 DisplayInfo(
                     device_name=device_name,
-                    label=self._monitor_label(device_name),
+                    label=f"{device_name} - {monitor_name}",
+                    monitor_id=monitor_id,
+                    monitor_key=monitor_key,
                     active=True,
                     primary=bool(info.dwFlags & MONITORINFOF_PRIMARY),
                     x=int(info.rcMonitor.left),
@@ -247,20 +252,20 @@ class DisplayController:
         EnumDisplayMonitors(None, None, MonitorEnumProc(callback), 0)
         return displays
 
-    def _monitor_label(self, device_name):
+    def _monitor_metadata(self, device_name):
         adapter = DISPLAY_DEVICEW()
         adapter.cb = ctypes.sizeof(adapter)
-        adapter_name = device_name
         if EnumDisplayDevicesW(device_name, 0, ctypes.byref(adapter), 0):
-            adapter_name = adapter.DeviceString or adapter_name
-        return f"{device_name} - {adapter_name}"
+            return adapter.DeviceString or device_name, adapter.DeviceID, adapter.DeviceKey
+        return device_name, "", ""
 
     def apply_profile(self, profile):
         errors = []
+        current_displays = self.list_displays()
         for display in profile.get("displays", []):
             if not display.get("apply", True):
                 continue
-            device = display["device_name"]
+            device = self._resolve_device_name(display, current_displays)
             mode = DEVMODEW()
             mode.dmSize = ctypes.sizeof(mode)
             if not self._load_mode(device, mode):
@@ -297,6 +302,16 @@ class DisplayController:
         if final_result != DISP_CHANGE_SUCCESSFUL:
             errors.append(f"final apply returned {final_result}")
         return errors
+
+    def _resolve_device_name(self, display, current_displays):
+        monitor_id = display.get("monitor_id", "")
+        monitor_key = display.get("monitor_key", "")
+        for current in current_displays:
+            if monitor_id and current.monitor_id == monitor_id:
+                return current.device_name
+            if monitor_key and current.monitor_key == monitor_key:
+                return current.device_name
+        return display["device_name"]
 
     def _load_mode(self, device, mode):
         if EnumDisplaySettingsW(device, ENUM_CURRENT_SETTINGS, ctypes.byref(mode)):
@@ -453,9 +468,22 @@ def load_config():
     if not CONFIG_PATH.exists():
         return {"profiles": []}
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return normalize_config(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
         return {"profiles": []}
+
+
+def normalize_config(config):
+    config.setdefault("profiles", [])
+    for profile in config["profiles"]:
+        profile.setdefault("hotkey", "")
+        profile.setdefault("taskbar_visible_displays", [])
+        for display in profile.get("displays", []):
+            display.setdefault("apply", True)
+            display.setdefault("enabled", display.get("active", True))
+            display.setdefault("monitor_id", "")
+            display.setdefault("monitor_key", "")
+    return config
 
 
 def save_config(config):
@@ -481,6 +509,13 @@ def profile_summary(profile):
         "disabled": f"{len(disabled)} off",
         "taskbars": f"{taskbar_count} taskbar",
     }
+
+
+def short_identity(identity):
+    if not identity:
+        return "-"
+    tail = identity.replace("\\", "/").split("/")[-1]
+    return tail[-28:] if len(tail) > 28 else tail
 
 
 class ProfileEditorDialog(tk.Toplevel):
@@ -537,7 +572,11 @@ class ProfileEditorDialog(tk.Toplevel):
 
             ttk.Checkbutton(table_frame, variable=apply_var).grid(row=row_index, column=0, padx=4, pady=2)
             ttk.Checkbutton(table_frame, variable=enabled_var).grid(row=row_index, column=1, padx=4, pady=2)
-            ttk.Label(table_frame, text=display.get("label", display.get("device_name", ""))).grid(
+            identity = short_identity(display.get("monitor_id", ""))
+            label = display.get("label", display.get("device_name", ""))
+            if identity != "-":
+                label = f"{label} [{identity}]"
+            ttk.Label(table_frame, text=label).grid(
                 row=row_index, column=2, sticky="w", padx=4, pady=2
             )
             ttk.Entry(table_frame, textvariable=values["x"], width=7).grid(row=row_index, column=3, padx=4, pady=2)
@@ -654,7 +693,7 @@ class DisplayManagerApp(tk.Tk):
         display_frame.rowconfigure(0, weight=1)
         display_frame.columnconfigure(0, weight=1)
 
-        columns = ("monitor", "state", "position", "resolution", "refresh")
+        columns = ("monitor", "state", "position", "resolution", "refresh", "identity")
         self.display_tree = ttk.Treeview(display_frame, columns=columns, show="headings", height=10)
         for column, width in {
             "monitor": 260,
@@ -662,6 +701,7 @@ class DisplayManagerApp(tk.Tk):
             "position": 110,
             "resolution": 110,
             "refresh": 80,
+            "identity": 160,
         }.items():
             self.display_tree.heading(column, text=column.title())
             self.display_tree.column(column, width=width, anchor="w")
@@ -744,6 +784,7 @@ class DisplayManagerApp(tk.Tk):
                     f"{display.x}, {display.y}",
                     f"{display.width} x {display.height}" if display.active else "-",
                     f"{display.frequency} Hz" if display.frequency else "-",
+                    short_identity(display.monitor_id),
                 ),
             )
         self._rebuild_taskbar_checks()

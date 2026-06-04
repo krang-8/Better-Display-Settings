@@ -1,6 +1,6 @@
 import unittest
 
-from display_manager import parse_hotkey, profile_summary
+from display_manager import normalize_config, parse_hotkey, profile_summary, short_identity
 
 
 class DisplayManagerLogicTests(unittest.TestCase):
@@ -26,6 +26,21 @@ class DisplayManagerLogicTests(unittest.TestCase):
                 "taskbars": "1 taskbar",
             },
         )
+
+    def test_normalize_config_adds_profile_defaults(self):
+        config = normalize_config({"profiles": [{"displays": [{"active": False}]}]})
+
+        display = config["profiles"][0]["displays"][0]
+        self.assertEqual(config["profiles"][0]["hotkey"], "")
+        self.assertEqual(config["profiles"][0]["taskbar_visible_displays"], [])
+        self.assertTrue(display["apply"])
+        self.assertFalse(display["enabled"])
+        self.assertEqual(display["monitor_id"], "")
+        self.assertEqual(display["monitor_key"], "")
+
+    def test_short_identity_uses_readable_tail(self):
+        self.assertEqual(short_identity(""), "-")
+        self.assertEqual(short_identity(r"MONITOR\\ACME123\\{long-device-instance}"), "{long-device-instance}")
 
 
 if __name__ == "__main__":
