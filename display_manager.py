@@ -6,6 +6,7 @@ import tkinter as tk
 import winreg
 from ctypes import wintypes
 from dataclasses import dataclass, asdict, is_dataclass
+from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
@@ -774,7 +775,12 @@ def taskbar_diagnostic_parts(taskbars, desired_device_names):
 
 
 def taskbar_apply_status(result, missing=None):
-    parts = [f"Updated {result.get('changed', 0)} taskbar window(s)"]
+    changed = int(result.get("changed", 0))
+    parts = [
+        f"Updated {changed} taskbar window(s)"
+        if changed
+        else "No taskbar window changes needed"
+    ]
     if result.get("enabled_windows_setting"):
         parts.append("enabled Windows multi-taskbar setting")
     if missing:
@@ -784,6 +790,22 @@ def taskbar_apply_status(result, missing=None):
 
 def should_retry_taskbar_apply(result, missing):
     return bool(result.get("enabled_windows_setting") or missing)
+
+
+def status_message(text, now=None):
+    stamp = (now or datetime.now()).strftime("%H:%M:%S")
+    return f"{stamp}  {text}"
+
+
+def app_summary(displays, profiles, taskbar_setting_enabled, enforce_taskbars):
+    monitor_count = len([display for display in displays if display_value(display, "active", True)])
+    profile_count = len(profiles)
+    setting = "on" if taskbar_setting_enabled else "off"
+    enforcement = "on" if enforce_taskbars else "off"
+    return (
+        f"{monitor_count} monitor(s) | {profile_count} profile(s) | "
+        f"Windows multi-taskbar {setting} | enforcement {enforcement}"
+    )
 
 
 def display_value(display, key, default=""):
@@ -957,6 +979,7 @@ class DisplayManagerApp(tk.Tk):
         self.config = load_config()
         self.displays = []
         self.taskbar_vars = {}
+        self.taskbar_retry_jobs = []
         self.hotkey_statuses = {}
         self.enforce_taskbars_var = tk.BooleanVar(
             value=bool(self.config.get("enforce_taskbar_visibility", True))
@@ -976,8 +999,13 @@ class DisplayManagerApp(tk.Tk):
         root.columnconfigure(1, weight=1)
         root.rowconfigure(1, weight=1)
 
-        heading = ttk.Label(root, text=APP_TITLE, font=("Segoe UI", 18, "bold"))
-        heading.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        header = ttk.Frame(root)
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        header.columnconfigure(0, weight=1)
+        heading = ttk.Label(header, text=APP_TITLE, font=("Segoe UI", 18, "bold"))
+        heading.grid(row=0, column=0, sticky="w")
+        self.summary = ttk.Label(header, text="", anchor="e")
+        self.summary.grid(row=0, column=1, sticky="e", padx=(12, 0))
 
         display_frame = ttk.LabelFrame(root, text="Displays", padding=10)
         display_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
@@ -1005,7 +1033,10 @@ class DisplayManagerApp(tk.Tk):
 
         display_buttons = ttk.Frame(display_frame)
         display_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(display_buttons, text="Refresh", command=self.refresh_displays).pack(side=tk.LEFT)
+        ttk.Button(display_buttons, text="Refresh", command=self.refresh_displays).pack(
+            side=tk.LEFT, padx=(0, 6)
+        )
+        ttk.Button(display_buttons, text="Repair Profiles", command=self.repair_profiles_now).pack(side=tk.LEFT)
 
         profile_frame = ttk.LabelFrame(root, text="Display Profiles", padding=10)
         profile_frame.grid(row=1, column=1, sticky="nsew", padx=(8, 0))
@@ -1056,16 +1087,16 @@ class DisplayManagerApp(tk.Tk):
 
         taskbar_buttons = ttk.Frame(taskbar_frame)
         taskbar_buttons.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(taskbar_buttons, text="Apply Taskbar Visibility", command=self.apply_taskbar_visibility).pack(
+        ttk.Button(taskbar_buttons, text="Apply", command=self.apply_taskbar_visibility).pack(
             side=tk.LEFT, padx=(0, 6)
         )
-        ttk.Button(taskbar_buttons, text="Show Taskbar Everywhere", command=self.show_taskbar_everywhere).pack(
-            side=tk.LEFT
-        )
-        ttk.Button(taskbar_buttons, text="Reset Taskbars", command=self.reset_taskbar_state).pack(
+        ttk.Button(taskbar_buttons, text="Show All", command=self.show_taskbar_everywhere).pack(
             side=tk.LEFT, padx=(6, 0)
         )
-        ttk.Button(taskbar_buttons, text="Refresh Taskbars", command=self.refresh_taskbar_status).pack(
+        ttk.Button(taskbar_buttons, text="Reset", command=self.reset_taskbar_state).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        ttk.Button(taskbar_buttons, text="Refresh", command=self.refresh_taskbar_status).pack(
             side=tk.LEFT, padx=(6, 0)
         )
         ttk.Button(taskbar_buttons, text="Diagnose", command=self.diagnose_taskbars).pack(
@@ -1103,9 +1134,11 @@ class DisplayManagerApp(tk.Tk):
                 ),
             )
         self._rebuild_taskbar_checks()
-        self.refresh_taskbar_status()
+        self._update_summary()
         if repaired:
             self._set_status(f"Repaired {repaired} saved profile(s) with current monitor identities.")
+        else:
+            self._set_status(f"Refreshed {len(self.displays)} monitor(s).")
 
     def _repair_profiles_for_current_monitors(self):
         repaired = 0
@@ -1115,6 +1148,15 @@ class DisplayManagerApp(tk.Tk):
         if repaired:
             save_config(self.config)
         return repaired
+
+    def repair_profiles_now(self):
+        repaired = self._repair_profiles_for_current_monitors()
+        self.refresh_profiles()
+        self._update_summary()
+        if repaired:
+            self._set_status(f"Repaired {repaired} saved profile(s) with current monitor identities.")
+        else:
+            self._set_status("Profiles already match the current monitors.")
 
     def refresh_profiles(self):
         self.profile_tree.delete(*self.profile_tree.get_children())
@@ -1136,6 +1178,7 @@ class DisplayManagerApp(tk.Tk):
             )
         self.hotkey_statuses = self.hotkeys.start(self.config.get("profiles", []))
         self._refresh_profile_hotkey_statuses()
+        self._update_summary()
         self._report_hotkey_registration_issues()
 
     def _refresh_profile_hotkey_statuses(self):
@@ -1218,6 +1261,7 @@ class DisplayManagerApp(tk.Tk):
         self.apply_profile(profile)
 
     def apply_profile(self, profile):
+        self._cancel_taskbar_retries()
         errors = self.display_controller.apply_profile(profile)
         self.refresh_displays()
         if "taskbar_visible_displays" in profile or "taskbar_visible_monitors" in profile:
@@ -1252,6 +1296,7 @@ class DisplayManagerApp(tk.Tk):
         self._set_status(f"Deleted profile '{profile['name']}'.")
 
     def apply_taskbar_visibility(self):
+        self._cancel_taskbar_retries()
         visible_entries = self._current_taskbar_visible_selection()
         visibility = taskbar_visibility_payload(visible_entries)
         visible = visibility["taskbar_visible_displays"]
@@ -1277,6 +1322,7 @@ class DisplayManagerApp(tk.Tk):
         save_config(self.config)
         visible = [display.device_name for display in visible_entries]
         result = self._apply_taskbar_visibility(visible, update_status=False)
+        self._update_summary()
         self._set_status(f"Reset taskbar state. {taskbar_apply_status(result)}; enforcement is off.")
 
     def _rebuild_taskbar_checks(self):
@@ -1297,7 +1343,7 @@ class DisplayManagerApp(tk.Tk):
             var = tk.BooleanVar(value=visible if has_saved_visible else True)
             self.taskbar_vars[display.device_name] = var
             label = (
-                f"{display.device_name} ({display.width} x {display.height} at {display.x}, {display.y})"
+                f"{display.label} ({display.width} x {display.height} at {display.x}, {display.y})"
                 f" [{short_identity(display.monitor_id)}]"
             )
             ttk.Checkbutton(self.taskbar_checks, text=label, variable=var).pack(anchor="w", pady=2)
@@ -1307,6 +1353,7 @@ class DisplayManagerApp(tk.Tk):
         mapped = sum(1 for taskbar in taskbars if taskbar["device_name"])
         visible = sum(1 for taskbar in taskbars if taskbar["visible"])
         setting = "on" if self.taskbar_controller.is_multi_taskbar_enabled() else "off"
+        self._update_summary()
         self._set_status(
             f"Found {len(self.displays)} monitor(s), {len(taskbars)} taskbar window(s), {mapped} mapped, {visible} visible; Windows multi-taskbar {setting}."
         )
@@ -1345,8 +1392,21 @@ class DisplayManagerApp(tk.Tk):
     def _schedule_taskbar_reapply_if_needed(self, visible, result, missing):
         if not should_retry_taskbar_apply(result, missing):
             return
+        self._cancel_taskbar_retries()
         for delay_ms in (1200, 3500):
-            self.after(delay_ms, lambda selected=list(visible): self._apply_taskbar_visibility(selected, False))
+            job = self.after(
+                delay_ms,
+                lambda selected=list(visible): self._apply_taskbar_visibility(selected, False),
+            )
+            self.taskbar_retry_jobs.append(job)
+
+    def _cancel_taskbar_retries(self):
+        for job in self.taskbar_retry_jobs:
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass
+        self.taskbar_retry_jobs = []
 
     def _taskbar_enforcement_loop(self):
         if self.enforce_taskbars_var.get() and self._has_saved_taskbar_visibility():
@@ -1359,6 +1419,19 @@ class DisplayManagerApp(tk.Tk):
     def _save_taskbar_enforcement_setting(self):
         self.config["enforce_taskbar_visibility"] = self.enforce_taskbars_var.get()
         save_config(self.config)
+        self._update_summary()
+        state = "on" if self.enforce_taskbars_var.get() else "off"
+        self._set_status(f"Taskbar enforcement is {state}.")
+
+    def _update_summary(self):
+        self.summary.configure(
+            text=app_summary(
+                self.displays,
+                self.config.get("profiles", []),
+                self.taskbar_controller.is_multi_taskbar_enabled(),
+                self.enforce_taskbars_var.get(),
+            )
+        )
 
     def _selected_profile(self):
         selection = self.profile_tree.selection()
@@ -1391,7 +1464,7 @@ class DisplayManagerApp(tk.Tk):
         self.after(200, self._poll_hotkeys)
 
     def _set_status(self, text):
-        self.status.configure(text=text)
+        self.status.configure(text=status_message(text))
 
     def _on_close(self):
         self.hotkeys.stop()

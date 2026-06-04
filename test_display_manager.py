@@ -1,8 +1,10 @@
 import unittest
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from display_manager import (
+    app_summary,
     backup_config,
     DisplayController,
     hotkey_issue_messages,
@@ -14,6 +16,7 @@ from display_manager import (
     repair_profile_for_current_monitors,
     should_retry_taskbar_apply,
     short_identity,
+    status_message,
     taskbar_apply_status,
     taskbar_diagnostic_parts,
     taskbar_visibility_payload,
@@ -106,10 +109,34 @@ class DisplayManagerLogicTests(unittest.TestCase):
             "Updated 1 taskbar window(s); enabled Windows multi-taskbar setting; missing taskbars for DISPLAY2",
         )
 
+    def test_taskbar_apply_status_reports_clean_noop(self):
+        self.assertEqual(
+            taskbar_apply_status({"changed": 0}, []),
+            "No taskbar window changes needed",
+        )
+
     def test_should_retry_taskbar_apply_only_when_windows_needs_time(self):
         self.assertFalse(should_retry_taskbar_apply({"changed": 1}, []))
         self.assertTrue(should_retry_taskbar_apply({"changed": 0, "enabled_windows_setting": True}, []))
         self.assertTrue(should_retry_taskbar_apply({"changed": 0}, ["DISPLAY2"]))
+
+    def test_status_message_adds_timestamp(self):
+        self.assertEqual(
+            status_message("Applied profile.", datetime(2026, 6, 3, 14, 5, 7)),
+            "14:05:07  Applied profile.",
+        )
+
+    def test_app_summary_reports_current_state(self):
+        displays = [
+            SimpleNamespace(active=True),
+            SimpleNamespace(active=True),
+            SimpleNamespace(active=False),
+        ]
+
+        self.assertEqual(
+            app_summary(displays, [{"name": "Dual"}], True, False),
+            "2 monitor(s) | 1 profile(s) | Windows multi-taskbar on | enforcement off",
+        )
 
     def test_repair_profile_for_current_monitors_drops_stale_adapters_and_backfills_ids(self):
         profile = {

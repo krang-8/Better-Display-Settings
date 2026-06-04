@@ -16,10 +16,13 @@ A small Windows display manager prototype.
 - Registers optional global hotkeys while the app is running, such as `Ctrl+Alt+1`.
 - Shows whether each profile hotkey is registered, missing, invalid, or unavailable because Windows rejected it.
 - Shows or hides Windows taskbar windows per active display.
+- Shows current monitor/profile/taskbar state in a header summary so action results stay readable.
+- Cancels pending taskbar retries when you apply a new taskbar selection or display profile, avoiding stacked delayed re-applies.
 - Retries taskbar visibility only when Windows needs time to create a missing taskbar window or when the app just enabled Windows' multi-monitor taskbar setting.
 - Only changes taskbar windows when Windows reports they are in the wrong visible/hidden state, reducing needless Explorer refreshes.
 - Includes a taskbar diagnostics action that reports visible/hidden versus expected state per mapped display.
 - Enables Windows' multi-monitor taskbar setting when a selected layout needs secondary taskbars, then reports if Explorer still has not created a desired taskbar window.
+- Includes a manual profile repair action for saved profiles with stale monitor identities.
 - Includes a reset action that shows taskbars everywhere and turns taskbar enforcement off.
 - Persists the last manually applied taskbar visibility selection by display name and monitor identity.
 - Keeps a `display_profiles.json.bak` backup before config writes and falls back to it if the main config cannot be read.
@@ -46,6 +49,7 @@ Profiles are stored beside the app in `display_profiles.json`.
 4. Select a profile and click `Edit Profile` to customize display coordinates, resolution, refresh rate, enabled monitor state, taskbar visibility, or hotkey.
 5. Click `Apply Selected`, or use the configured hotkey while the app is running.
 6. Use the taskbar checkboxes when you only want to update which screens show a taskbar.
+7. Use `Repair Profiles` if saved profiles still contain stale display entries after changing monitor hardware or ports.
 
 In the profile editor:
 
@@ -61,11 +65,10 @@ In the profile editor:
 - Per-screen taskbar control works by hiding or showing Windows taskbar windows. Explorer may recreate those windows after display changes, sign-in, or restart, so the app can keep enforcing the selected layout while it stays open.
 - Use `Diagnose` if taskbar state looks wrong; it reports what Windows currently exposes for each taskbar window.
 - If `Diagnose` reports missing desired taskbars, Explorer has not exposed a taskbar window for that display yet. The app enables Windows' multi-monitor taskbar setting automatically when needed.
-- Use `Reset Taskbars` if taskbar state gets confusing; it shows all taskbars and disables enforcement so Windows returns to a safe baseline.
+- Use `Reset` if taskbar state gets confusing; it shows all taskbars and disables enforcement so Windows returns to a safe baseline.
 - If a saved profile references a physical monitor that cannot be matched, the app warns and falls back to the saved Windows display name.
 - Display resolution is read from the active Windows display mode, not the DPI-scaled monitor rectangle.
 - Display profile application uses the built-in `ChangeDisplaySettingsExW` API. Resolution, position, color depth, refresh rate, primary display, and attach/detach requests are covered in this first version; some GPU/display-driver combinations may require a later `SetDisplayConfig` implementation for perfect enable/disable behavior.
-- This repo is ready to push once an `origin` remote is configured. The current environment can push to a provided remote URL, but does not expose a GitHub repository creation tool.
 
 ## Test
 
