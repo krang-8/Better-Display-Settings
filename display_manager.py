@@ -19,6 +19,7 @@ DISPLAY_DEVICE_ACTIVE = 0x00000001
 DISPLAY_DEVICE_PRIMARY_DEVICE = 0x00000004
 
 ENUM_CURRENT_SETTINGS = -1
+ENUM_REGISTRY_SETTINGS = -2
 
 DM_BITSPERPEL = 0x00040000
 DM_PELSWIDTH = 0x00080000
@@ -28,6 +29,7 @@ DM_DISPLAYFREQUENCY = 0x00400000
 DM_POSITION = 0x00000020
 
 CDS_UPDATEREGISTRY = 0x00000001
+CDS_SET_PRIMARY = 0x00000010
 CDS_NORESET = 0x10000000
 DISP_CHANGE_SUCCESSFUL = 0
 
@@ -201,7 +203,7 @@ class DisplayController:
             if EnumDisplayDevicesW(adapter.DeviceName, 0, ctypes.byref(monitor), 0):
                 monitor_name = monitor.DeviceString or monitor_name
 
-            active = bool(adapter.StateFlags & DISPLAY_DEVICE_ACTIVE) and has_mode
+            active = bool(adapter.StateFlags & DISPLAY_DEVICE_ACTIVE) and bool(has_mode)
             displays.append(
                 DisplayInfo(
                     device_name=adapter.DeviceName,
@@ -222,31 +224,36 @@ class DisplayController:
     def apply_profile(self, profile):
         errors = []
         for display in profile.get("displays", []):
-            if not display.get("active", True):
+            if not display.get("apply", True):
                 continue
             device = display["device_name"]
             mode = DEVMODEW()
             mode.dmSize = ctypes.sizeof(mode)
-            if not EnumDisplaySettingsW(device, ENUM_CURRENT_SETTINGS, ctypes.byref(mode)):
-                errors.append(f"{device}: unable to read current settings")
+            if not self._load_mode(device, mode):
+                errors.append(f"{device}: unable to read current or registry settings")
                 continue
 
             mode.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL
-            mode.dmPosition.x = int(display.get("x", 0))
-            mode.dmPosition.y = int(display.get("y", 0))
-            mode.dmPelsWidth = int(display.get("width", 0))
-            mode.dmPelsHeight = int(display.get("height", 0))
+            enabled = display.get("enabled", display.get("active", True))
+            mode.dmPosition.x = int(display.get("x", 0)) if enabled else 0
+            mode.dmPosition.y = int(display.get("y", 0)) if enabled else 0
+            mode.dmPelsWidth = int(display.get("width", 0)) if enabled else 0
+            mode.dmPelsHeight = int(display.get("height", 0)) if enabled else 0
             mode.dmBitsPerPel = int(display.get("bits_per_pixel", 32))
             frequency = int(display.get("frequency", 0))
-            if frequency:
+            if enabled and frequency:
                 mode.dmFields |= DM_DISPLAYFREQUENCY
                 mode.dmDisplayFrequency = frequency
+
+            flags = CDS_UPDATEREGISTRY | CDS_NORESET
+            if enabled and display.get("primary", False):
+                flags |= CDS_SET_PRIMARY
 
             result = ChangeDisplaySettingsExW(
                 device,
                 ctypes.byref(mode),
                 None,
-                CDS_UPDATEREGISTRY | CDS_NORESET,
+                flags,
                 None,
             )
             if result != DISP_CHANGE_SUCCESSFUL:
@@ -256,6 +263,11 @@ class DisplayController:
         if final_result != DISP_CHANGE_SUCCESSFUL:
             errors.append(f"final apply returned {final_result}")
         return errors
+
+    def _load_mode(self, device, mode):
+        if EnumDisplaySettingsW(device, ENUM_CURRENT_SETTINGS, ctypes.byref(mode)):
+            return True
+        return bool(EnumDisplaySettingsW(device, ENUM_REGISTRY_SETTINGS, ctypes.byref(mode)))
 
 
 class TaskbarController:
@@ -416,6 +428,13 @@ def save_config(config):
     CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
+def display_to_profile_entry(display):
+    entry = asdict(display)
+    entry["apply"] = True
+    entry["enabled"] = display.active
+    return entry
+
+
 class ProfileEditorDialog(tk.Toplevel):
     def __init__(self, parent, profile):
         super().__init__(parent)
@@ -446,10 +465,10 @@ class ProfileEditorDialog(tk.Toplevel):
 
         table_frame = ttk.Frame(root)
         table_frame.grid(row=2, column=0, columnspan=2, sticky="nsew")
-        for index in range(8):
+        for index in range(9):
             table_frame.columnconfigure(index, weight=1 if index == 1 else 0)
 
-        headers = ("Use", "Display", "X", "Y", "Width", "Height", "Hz", "Taskbar")
+        headers = ("Apply", "Enabled", "Display", "X", "Y", "Width", "Height", "Hz", "Taskbar")
         for column, text in enumerate(headers):
             ttk.Label(table_frame, text=text, font=("Segoe UI", 9, "bold")).grid(
                 row=0, column=column, sticky="w", padx=4, pady=(0, 4)
@@ -457,7 +476,8 @@ class ProfileEditorDialog(tk.Toplevel):
 
         visible_taskbars = set(self.profile.get("taskbar_visible_displays", []))
         for row_index, display in enumerate(self.profile.get("displays", []), start=1):
-            enabled_var = tk.BooleanVar(value=bool(display.get("active", True)))
+            apply_var = tk.BooleanVar(value=bool(display.get("apply", True)))
+            enabled_var = tk.BooleanVar(value=bool(display.get("enabled", display.get("active", True))))
             taskbar_var = tk.BooleanVar(value=display.get("device_name") in visible_taskbars)
             values = {
                 "x": tk.StringVar(value=str(display.get("x", 0))),
@@ -467,25 +487,27 @@ class ProfileEditorDialog(tk.Toplevel):
                 "frequency": tk.StringVar(value=str(display.get("frequency", 0))),
             }
 
-            ttk.Checkbutton(table_frame, variable=enabled_var).grid(row=row_index, column=0, padx=4, pady=2)
+            ttk.Checkbutton(table_frame, variable=apply_var).grid(row=row_index, column=0, padx=4, pady=2)
+            ttk.Checkbutton(table_frame, variable=enabled_var).grid(row=row_index, column=1, padx=4, pady=2)
             ttk.Label(table_frame, text=display.get("label", display.get("device_name", ""))).grid(
-                row=row_index, column=1, sticky="w", padx=4, pady=2
+                row=row_index, column=2, sticky="w", padx=4, pady=2
             )
-            ttk.Entry(table_frame, textvariable=values["x"], width=7).grid(row=row_index, column=2, padx=4, pady=2)
-            ttk.Entry(table_frame, textvariable=values["y"], width=7).grid(row=row_index, column=3, padx=4, pady=2)
+            ttk.Entry(table_frame, textvariable=values["x"], width=7).grid(row=row_index, column=3, padx=4, pady=2)
+            ttk.Entry(table_frame, textvariable=values["y"], width=7).grid(row=row_index, column=4, padx=4, pady=2)
             ttk.Entry(table_frame, textvariable=values["width"], width=8).grid(
-                row=row_index, column=4, padx=4, pady=2
-            )
-            ttk.Entry(table_frame, textvariable=values["height"], width=8).grid(
                 row=row_index, column=5, padx=4, pady=2
             )
-            ttk.Entry(table_frame, textvariable=values["frequency"], width=7).grid(
+            ttk.Entry(table_frame, textvariable=values["height"], width=8).grid(
                 row=row_index, column=6, padx=4, pady=2
             )
-            ttk.Checkbutton(table_frame, variable=taskbar_var).grid(row=row_index, column=7, padx=4, pady=2)
+            ttk.Entry(table_frame, textvariable=values["frequency"], width=7).grid(
+                row=row_index, column=7, padx=4, pady=2
+            )
+            ttk.Checkbutton(table_frame, variable=taskbar_var).grid(row=row_index, column=8, padx=4, pady=2)
             self.rows.append(
                 {
                     "display": display,
+                    "apply": apply_var,
                     "enabled": enabled_var,
                     "taskbar": taskbar_var,
                     "values": values,
@@ -516,14 +538,22 @@ class ProfileEditorDialog(tk.Toplevel):
         visible_taskbars = []
         for row in self.rows:
             display = dict(row["display"])
-            display["active"] = row["enabled"].get()
+            display["apply"] = row["apply"].get()
+            display["enabled"] = row["enabled"].get()
             try:
                 for key, variable in row["values"].items():
                     display[key] = int(variable.get())
             except ValueError:
                 messagebox.showwarning("Invalid Display Value", "Display values must be whole numbers.", parent=self)
                 return
-            if display["active"] and row["taskbar"].get():
+            if display["apply"] and display["enabled"] and (display["width"] <= 0 or display["height"] <= 0):
+                messagebox.showwarning(
+                    "Invalid Resolution",
+                    "Enabled displays need a width and height greater than zero.",
+                    parent=self,
+                )
+                return
+            if display["apply"] and display["enabled"] and row["taskbar"].get():
                 visible_taskbars.append(display["device_name"])
             updated_displays.append(display)
 
@@ -677,7 +707,7 @@ class DisplayManagerApp(tk.Tk):
         profile = {
             "name": name.strip(),
             "hotkey": (hotkey or "").strip(),
-            "displays": [asdict(display) for display in self.displays],
+            "displays": [display_to_profile_entry(display) for display in self.displays],
             "taskbar_visible_displays": [
                 display.device_name
                 for display in self.displays
