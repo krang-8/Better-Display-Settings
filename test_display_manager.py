@@ -17,6 +17,7 @@ from display_manager import (
     normalize_config,
     parse_hotkey,
     parse_edid_monitor_name,
+    profile_preview,
     profile_summary,
     repair_profile_for_current_monitors,
     should_retry_taskbar_apply,
@@ -65,6 +66,29 @@ class DisplayManagerLogicTests(unittest.TestCase):
                 "taskbars": "1 taskbar",
             },
         )
+
+    def test_profile_preview_summarizes_selected_profile(self):
+        profile = {
+            "name": "Triple",
+            "hotkey": "Ctrl+Alt+3",
+            "taskbar_visible_displays": ["DISPLAY1"],
+            "displays": [
+                {"device_name": "DISPLAY1", "apply": True, "enabled": True},
+                {"device_name": "DISPLAY2", "apply": True, "enabled": False},
+            ],
+        }
+
+        self.assertEqual(
+            profile_preview(profile, "registered"),
+            {
+                "name": "Triple",
+                "meta": "Ctrl+Alt+3 | hotkey registered",
+                "details": "1 on | 1 off | 1 taskbar",
+            },
+        )
+
+    def test_profile_preview_handles_empty_selection(self):
+        self.assertEqual(profile_preview(None)["name"], "No profile selected")
 
     def test_normalize_config_adds_profile_defaults(self):
         config = normalize_config({"profiles": [{"displays": [{"active": False}]}]})

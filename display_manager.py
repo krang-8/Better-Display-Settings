@@ -695,6 +695,23 @@ def profile_summary(profile):
     }
 
 
+def profile_preview(profile, hotkey_status="not set"):
+    if not profile:
+        return {
+            "name": "No profile selected",
+            "meta": "Choose a profile to preview its layout.",
+            "details": "Save your current layout or select an existing profile.",
+        }
+    summary = profile_summary(profile)
+    hotkey = profile.get("hotkey") or "No hotkey"
+    status = hotkey_status or "not set"
+    return {
+        "name": profile.get("name", "Unnamed profile"),
+        "meta": f"{hotkey} | hotkey {status}",
+        "details": f"{summary['enabled']} | {summary['disabled']} | {summary['taskbars']}",
+    }
+
+
 def taskbar_visible_entries(source, displays):
     visible_devices = set(source.get("taskbar_visible_displays", []))
     visible_monitors = set(source.get("taskbar_visible_monitors", []))
@@ -1078,6 +1095,8 @@ class DisplayManagerApp(tk.Tk):
         self.taskbar_retry_jobs = []
         self.metric_vars = {}
         self.metric_value_labels = {}
+        self.profile_preview_vars = {}
+        self.profile_preview_status_label = None
         self.hotkey_statuses = {}
         self.enforce_taskbars_var = tk.BooleanVar(
             value=bool(self.config.get("enforce_taskbar_visibility", True))
@@ -1116,6 +1135,12 @@ class DisplayManagerApp(tk.Tk):
         style.configure("MetricGood.TLabel", background=COLORS["surface_alt"], foreground=COLORS["success"], font=("Segoe UI", 15, "bold"))
         style.configure("MetricWarn.TLabel", background=COLORS["surface_alt"], foreground=COLORS["warning"], font=("Segoe UI", 15, "bold"))
         style.configure("MetricLabel.TLabel", background=COLORS["surface_alt"], foreground=COLORS["muted"], font=("Segoe UI", 9))
+        style.configure("Preview.TFrame", background=COLORS["surface_alt"])
+        style.configure("PreviewTitle.TLabel", background=COLORS["surface_alt"], foreground=COLORS["text"], font=("Segoe UI", 13, "bold"))
+        style.configure("PreviewMeta.TLabel", background=COLORS["surface_alt"], foreground=COLORS["muted"], font=("Segoe UI", 9))
+        style.configure("PreviewGood.TLabel", background=COLORS["surface_alt"], foreground=COLORS["success"], font=("Segoe UI", 9, "bold"))
+        style.configure("PreviewWarn.TLabel", background=COLORS["surface_alt"], foreground=COLORS["warning"], font=("Segoe UI", 9, "bold"))
+        style.configure("PreviewBad.TLabel", background=COLORS["surface_alt"], foreground=COLORS["danger"], font=("Segoe UI", 9, "bold"))
         style.configure("Status.TLabel", background=COLORS["surface"], foreground=COLORS["muted"], padding=(12, 8))
         style.configure(
             "Modern.TLabelframe",
@@ -1311,8 +1336,38 @@ class DisplayManagerApp(tk.Tk):
 
         profile_frame = ttk.LabelFrame(root, text="Display Profiles", padding=12, style="Modern.TLabelframe")
         profile_frame.grid(row=2, column=1, sticky="nsew", padx=(8, 0))
-        profile_frame.rowconfigure(0, weight=1)
+        profile_frame.rowconfigure(1, weight=1)
         profile_frame.columnconfigure(0, weight=1)
+
+        preview_card = ttk.Frame(profile_frame, padding=(14, 12), style="Preview.TFrame")
+        preview_card.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        preview_card.columnconfigure(1, weight=1)
+        tk.Frame(preview_card, bg=COLORS["accent"], width=4, height=54).grid(
+            row=0,
+            column=0,
+            rowspan=3,
+            sticky="nsw",
+            padx=(0, 10),
+        )
+        for key in ("name", "meta", "details"):
+            self.profile_preview_vars[key] = tk.StringVar(value="")
+        ttk.Label(preview_card, textvariable=self.profile_preview_vars["name"], style="PreviewTitle.TLabel").grid(
+            row=0,
+            column=1,
+            sticky="w",
+        )
+        self.profile_preview_status_label = ttk.Label(
+            preview_card,
+            textvariable=self.profile_preview_vars["meta"],
+            style="PreviewMeta.TLabel",
+        )
+        self.profile_preview_status_label.grid(row=1, column=1, sticky="w", pady=(2, 0))
+        ttk.Label(preview_card, textvariable=self.profile_preview_vars["details"], style="PreviewMeta.TLabel").grid(
+            row=2,
+            column=1,
+            sticky="w",
+            pady=(4, 0),
+        )
 
         profile_columns = ("name", "hotkey", "hotkey_status", "enabled", "disabled", "taskbars")
         self.profile_tree = ttk.Treeview(profile_frame, columns=profile_columns, show="headings", height=10)
@@ -1326,18 +1381,19 @@ class DisplayManagerApp(tk.Tk):
         }.items():
             self.profile_tree.heading(column, text=column.title())
             self.profile_tree.column(column, width=width, anchor="w")
-        self.profile_tree.grid(row=0, column=0, sticky="nsew")
+        self.profile_tree.grid(row=1, column=0, sticky="nsew")
         profile_scroll_y = ttk.Scrollbar(profile_frame, orient=tk.VERTICAL, command=self.profile_tree.yview)
-        profile_scroll_y.grid(row=0, column=1, sticky="ns")
+        profile_scroll_y.grid(row=1, column=1, sticky="ns")
         profile_scroll_x = ttk.Scrollbar(profile_frame, orient=tk.HORIZONTAL, command=self.profile_tree.xview)
-        profile_scroll_x.grid(row=1, column=0, sticky="ew")
+        profile_scroll_x.grid(row=2, column=0, sticky="ew")
         self.profile_tree.configure(yscrollcommand=profile_scroll_y.set, xscrollcommand=profile_scroll_x.set)
+        self.profile_tree.bind("<<TreeviewSelect>>", lambda _event: self._update_profile_preview())
         self.profile_tree.tag_configure("status_registered", foreground=COLORS["success"])
         self.profile_tree.tag_configure("status_problem", foreground=COLORS["danger"])
         self.profile_tree.tag_configure("status_muted", foreground=COLORS["muted"])
 
         profile_buttons = ttk.Frame(profile_frame, style="Toolbar.TFrame")
-        profile_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        profile_buttons.grid(row=3, column=0, sticky="ew", pady=(10, 0))
         ttk.Button(
             profile_buttons,
             text="Save Current As...",
@@ -1559,6 +1615,7 @@ class DisplayManagerApp(tk.Tk):
             )
         self.hotkey_statuses = self.hotkeys.start(self.config.get("profiles", []))
         self._refresh_profile_hotkey_statuses()
+        self._update_profile_preview()
         self._update_summary()
         self._report_hotkey_registration_issues()
 
@@ -1571,6 +1628,29 @@ class DisplayManagerApp(tk.Tk):
             status = self.hotkey_statuses.get(profile["name"], "not set")
             values[2] = status
             self.profile_tree.item(iid, values=values, tags=(hotkey_status_tag(status),))
+        self._update_profile_preview()
+
+    def _update_profile_preview(self):
+        profile = None
+        status = "not set"
+        selection = self.profile_tree.selection()
+        if selection:
+            index = int(selection[0])
+            profiles = self.config.get("profiles", [])
+            if 0 <= index < len(profiles):
+                profile = profiles[index]
+                status = self.hotkey_statuses.get(profile["name"], "not set")
+        preview = profile_preview(profile, status)
+        for key, value in preview.items():
+            self.profile_preview_vars[key].set(value)
+        if self.profile_preview_status_label:
+            if status == "registered":
+                style = "PreviewGood.TLabel"
+            elif status in {"invalid", "unavailable"}:
+                style = "PreviewBad.TLabel"
+            else:
+                style = "PreviewWarn.TLabel" if profile else "PreviewMeta.TLabel"
+            self.profile_preview_status_label.configure(style=style)
 
     def _report_hotkey_registration_issues(self):
         issues = hotkey_issue_messages(self.config.get("profiles", []), self.hotkey_statuses)
