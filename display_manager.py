@@ -265,7 +265,9 @@ class DisplayController:
         for display in profile.get("displays", []):
             if not display.get("apply", True):
                 continue
-            device = self._resolve_device_name(display, current_displays)
+            device, matched = self._resolve_device_name(display, current_displays)
+            if not matched and (display.get("monitor_id") or display.get("monitor_key")):
+                errors.append(f"{display.get('label', device)}: physical monitor not currently matched")
             mode = DEVMODEW()
             mode.dmSize = ctypes.sizeof(mode)
             if not self._load_mode(device, mode):
@@ -308,10 +310,10 @@ class DisplayController:
         monitor_key = display.get("monitor_key", "")
         for current in current_displays:
             if monitor_id and current.monitor_id == monitor_id:
-                return current.device_name
+                return current.device_name, True
             if monitor_key and current.monitor_key == monitor_key:
-                return current.device_name
-        return display["device_name"]
+                return current.device_name, True
+        return display["device_name"], False
 
     def _load_mode(self, device, mode):
         if EnumDisplaySettingsW(device, ENUM_CURRENT_SETTINGS, ctypes.byref(mode)):
@@ -713,6 +715,7 @@ class DisplayManagerApp(tk.Tk):
         self.refresh_displays()
         self.refresh_profiles()
         self.after(200, self._poll_hotkeys)
+        self.after(750, self._reapply_saved_taskbar_visibility)
         self.after(2500, self._taskbar_enforcement_loop)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -744,9 +747,14 @@ class DisplayManagerApp(tk.Tk):
             self.display_tree.heading(column, text=column.title())
             self.display_tree.column(column, width=width, anchor="w")
         self.display_tree.grid(row=0, column=0, sticky="nsew")
+        display_scroll_y = ttk.Scrollbar(display_frame, orient=tk.VERTICAL, command=self.display_tree.yview)
+        display_scroll_y.grid(row=0, column=1, sticky="ns")
+        display_scroll_x = ttk.Scrollbar(display_frame, orient=tk.HORIZONTAL, command=self.display_tree.xview)
+        display_scroll_x.grid(row=1, column=0, sticky="ew")
+        self.display_tree.configure(yscrollcommand=display_scroll_y.set, xscrollcommand=display_scroll_x.set)
 
         display_buttons = ttk.Frame(display_frame)
-        display_buttons.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        display_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         ttk.Button(display_buttons, text="Refresh", command=self.refresh_displays).pack(side=tk.LEFT)
 
         profile_frame = ttk.LabelFrame(root, text="Display Profiles", padding=10)
@@ -766,9 +774,14 @@ class DisplayManagerApp(tk.Tk):
             self.profile_tree.heading(column, text=column.title())
             self.profile_tree.column(column, width=width, anchor="w")
         self.profile_tree.grid(row=0, column=0, sticky="nsew")
+        profile_scroll_y = ttk.Scrollbar(profile_frame, orient=tk.VERTICAL, command=self.profile_tree.yview)
+        profile_scroll_y.grid(row=0, column=1, sticky="ns")
+        profile_scroll_x = ttk.Scrollbar(profile_frame, orient=tk.HORIZONTAL, command=self.profile_tree.xview)
+        profile_scroll_x.grid(row=1, column=0, sticky="ew")
+        self.profile_tree.configure(yscrollcommand=profile_scroll_y.set, xscrollcommand=profile_scroll_x.set)
 
         profile_buttons = ttk.Frame(profile_frame)
-        profile_buttons.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        profile_buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         ttk.Button(profile_buttons, text="Save Current As...", command=self.save_current_profile).pack(
             side=tk.LEFT, padx=(0, 6)
         )
@@ -960,7 +973,10 @@ class DisplayManagerApp(tk.Tk):
             )
             var = tk.BooleanVar(value=visible if has_saved_visible else True)
             self.taskbar_vars[display.device_name] = var
-            label = f"{display.device_name} ({display.width} x {display.height} at {display.x}, {display.y})"
+            label = (
+                f"{display.device_name} ({display.width} x {display.height} at {display.x}, {display.y})"
+                f" [{short_identity(display.monitor_id)}]"
+            )
             ttk.Checkbutton(self.taskbar_checks, text=label, variable=var).pack(anchor="w", pady=2)
 
     def refresh_taskbar_status(self):
@@ -991,9 +1007,20 @@ class DisplayManagerApp(tk.Tk):
             self.after(delay_ms, lambda selected=list(visible): self._apply_taskbar_visibility(selected, False))
 
     def _taskbar_enforcement_loop(self):
-        if self.enforce_taskbars_var.get() and "taskbar_visible_displays" in self.config:
+        if self.enforce_taskbars_var.get() and self._has_saved_taskbar_visibility():
             self._apply_taskbar_visibility(self._resolve_taskbar_visible_devices(self.config), False)
         self.after(2500, self._taskbar_enforcement_loop)
+
+    def _reapply_saved_taskbar_visibility(self):
+        if not self._has_saved_taskbar_visibility():
+            return
+        visible = self._resolve_taskbar_visible_devices(self.config)
+        changed = self._apply_taskbar_visibility(visible, update_status=False)
+        self._schedule_taskbar_reapply(visible)
+        self._set_status(f"Restored saved taskbar visibility. Updated {changed} taskbar window(s).")
+
+    def _has_saved_taskbar_visibility(self):
+        return "taskbar_visible_displays" in self.config or "taskbar_visible_monitors" in self.config
 
     def _save_taskbar_enforcement_setting(self):
         self.config["enforce_taskbar_visibility"] = self.enforce_taskbars_var.get()

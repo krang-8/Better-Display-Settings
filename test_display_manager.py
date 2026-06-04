@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from display_manager import (
+    DisplayController,
     normalize_config,
     parse_hotkey,
     profile_summary,
@@ -61,6 +62,26 @@ class DisplayManagerLogicTests(unittest.TestCase):
 
         self.assertEqual(payload["taskbar_visible_displays"], ["DISPLAY1", "DISPLAY2"])
         self.assertEqual(payload["taskbar_visible_monitors"], ["MONITOR-1", "KEY-2"])
+
+    def test_resolve_device_name_reports_identity_match(self):
+        controller = DisplayController()
+        device, matched = controller._resolve_device_name(
+            {"device_name": "DISPLAY9", "monitor_id": "MONITOR-1", "monitor_key": ""},
+            [SimpleNamespace(device_name="DISPLAY2", monitor_id="MONITOR-1", monitor_key="KEY-1")],
+        )
+
+        self.assertEqual(device, "DISPLAY2")
+        self.assertTrue(matched)
+
+    def test_resolve_device_name_falls_back_when_identity_is_missing(self):
+        controller = DisplayController()
+        device, matched = controller._resolve_device_name(
+            {"device_name": "DISPLAY9", "monitor_id": "MONITOR-X", "monitor_key": ""},
+            [SimpleNamespace(device_name="DISPLAY2", monitor_id="MONITOR-1", monitor_key="KEY-1")],
+        )
+
+        self.assertEqual(device, "DISPLAY9")
+        self.assertFalse(matched)
 
 
 if __name__ == "__main__":
