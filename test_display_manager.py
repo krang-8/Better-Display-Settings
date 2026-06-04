@@ -13,6 +13,7 @@ from display_manager import (
     profile_summary,
     repair_profile_for_current_monitors,
     short_identity,
+    taskbar_apply_status,
     taskbar_diagnostic_parts,
     taskbar_visibility_payload,
     unique_profile_name,
@@ -93,6 +94,15 @@ class DisplayManagerLogicTests(unittest.TestCase):
         self.assertEqual(
             taskbar_diagnostic_parts(taskbars, {"DISPLAY1"}),
             ["DISPLAY1: visible/show", "DISPLAY2: visible/hide", "unmapped: hidden/hide"],
+        )
+
+    def test_taskbar_apply_status_reports_setting_and_missing_windows(self):
+        self.assertEqual(
+            taskbar_apply_status(
+                {"changed": 1, "enabled_windows_setting": True},
+                ["DISPLAY2"],
+            ),
+            "Updated 1 taskbar window(s); enabled Windows multi-taskbar setting; missing taskbars for DISPLAY2",
         )
 
     def test_repair_profile_for_current_monitors_drops_stale_adapters_and_backfills_ids(self):

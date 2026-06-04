@@ -45,6 +45,11 @@ MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 WM_HOTKEY = 0x0312
 WM_QUIT = 0x0012
+WM_SETTINGCHANGE = 0x001A
+HWND_BROADCAST = 0xFFFF
+SMTO_ABORTIFHUNG = 0x0002
+TASKBAR_SETTINGS_SUBKEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+MULTI_TASKBAR_VALUE = "MMTaskbarEnabled"
 
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -192,6 +197,17 @@ GetMessageW.restype = wintypes.BOOL
 PostThreadMessageW = user32.PostThreadMessageW
 PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 PostThreadMessageW.restype = wintypes.BOOL
+SendMessageTimeoutW = user32.SendMessageTimeoutW
+SendMessageTimeoutW.argtypes = [
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.WPARAM,
+    wintypes.LPCWSTR,
+    wintypes.UINT,
+    wintypes.UINT,
+    ctypes.POINTER(wintypes.DWORD),
+]
+SendMessageTimeoutW.restype = wintypes.LPARAM
 GetCurrentThreadId = ctypes.WinDLL("kernel32", use_last_error=True).GetCurrentThreadId
 GetCurrentThreadId.restype = wintypes.DWORD
 VkKeyScanW = user32.VkKeyScanW
@@ -380,6 +396,34 @@ class DisplayController:
 class TaskbarController:
     TASKBAR_CLASSES = {"Shell_TrayWnd", "Shell_SecondaryTrayWnd"}
 
+    def is_multi_taskbar_enabled(self):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, TASKBAR_SETTINGS_SUBKEY) as key:
+                value, _value_type = winreg.QueryValueEx(key, MULTI_TASKBAR_VALUE)
+                return int(value) != 0
+        except OSError:
+            return False
+
+    def ensure_multi_taskbar_enabled(self):
+        if self.is_multi_taskbar_enabled():
+            return False
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, TASKBAR_SETTINGS_SUBKEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, MULTI_TASKBAR_VALUE, 0, winreg.REG_DWORD, 1)
+        self.broadcast_taskbar_setting_change()
+        return True
+
+    def broadcast_taskbar_setting_change(self):
+        result = wintypes.DWORD()
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            "TraySettings",
+            SMTO_ABORTIFHUNG,
+            1000,
+            ctypes.byref(result),
+        )
+
     def list_taskbars(self, displays):
         taskbars = []
 
@@ -411,6 +455,9 @@ class TaskbarController:
 
     def apply_visibility(self, visible_device_names, displays):
         visible = set(visible_device_names)
+        enabled_windows_setting = False
+        if self._needs_secondary_taskbars(visible, displays):
+            enabled_windows_setting = self.ensure_multi_taskbar_enabled()
         changed = 0
         for taskbar in self.list_taskbars(displays):
             device_name = taskbar["device_name"]
@@ -421,7 +468,19 @@ class TaskbarController:
                 continue
             ShowWindow(taskbar["hwnd"], SW_SHOW if should_show else SW_HIDE)
             changed += 1
-        return changed
+        return {
+            "changed": changed,
+            "enabled_windows_setting": enabled_windows_setting,
+        }
+
+    def missing_desired_taskbars(self, visible_device_names, displays):
+        desired = set(visible_device_names)
+        mapped = {taskbar["device_name"] for taskbar in self.list_taskbars(displays) if taskbar["device_name"]}
+        return sorted(desired - mapped)
+
+    def _needs_secondary_taskbars(self, visible_device_names, displays):
+        primary = next((display.device_name for display in displays if display.primary), None)
+        return any(device_name != primary for device_name in visible_device_names)
 
     def _match_display(self, rect, displays):
         best_display = None
@@ -712,6 +771,15 @@ def taskbar_diagnostic_parts(taskbars, desired_device_names):
         expected = "show" if device_name in desired else "hide"
         parts.append(f"{device_name}: {actual}/{expected}")
     return parts
+
+
+def taskbar_apply_status(result, missing=None):
+    parts = [f"Updated {result.get('changed', 0)} taskbar window(s)"]
+    if result.get("enabled_windows_setting"):
+        parts.append("enabled Windows multi-taskbar setting")
+    if missing:
+        parts.append("missing taskbars for " + ", ".join(missing))
+    return "; ".join(parts)
 
 
 def display_value(display, key, default=""):
@@ -1155,13 +1223,16 @@ class DisplayManagerApp(tk.Tk):
             self.config["taskbar_visible_monitors"] = profile.get("taskbar_visible_monitors", [])
             save_config(self.config)
             self._rebuild_taskbar_checks()
-            changed = self._apply_taskbar_visibility(visible, update_status=False)
+            result = self._apply_taskbar_visibility(visible, update_status=False)
             self._schedule_taskbar_reapply(visible)
         else:
-            changed = 0
+            result = {"changed": 0}
         if errors:
             messagebox.showwarning("Profile Applied With Warnings", "\n".join(errors), parent=self)
-        self._set_status(f"Applied profile '{profile['name']}'. Updated {changed} taskbar window(s).")
+        missing = self.taskbar_controller.missing_desired_taskbars(
+            self._resolve_taskbar_visible_devices(profile), self.displays
+        )
+        self._set_status(f"Applied profile '{profile['name']}'. {taskbar_apply_status(result, missing)}.")
 
     def delete_selected_profile(self):
         profile = self._selected_profile()
@@ -1182,9 +1253,10 @@ class DisplayManagerApp(tk.Tk):
         visible = visibility["taskbar_visible_displays"]
         self.config.update(visibility)
         save_config(self.config)
-        changed = self._apply_taskbar_visibility(visible, update_status=False)
+        result = self._apply_taskbar_visibility(visible, update_status=False)
         self._schedule_taskbar_reapply(visible)
-        self._set_status(f"Updated {changed} taskbar window(s).")
+        missing = self.taskbar_controller.missing_desired_taskbars(visible, self.displays)
+        self._set_status(taskbar_apply_status(result, missing) + ".")
 
     def show_taskbar_everywhere(self):
         for var in self.taskbar_vars.values():
@@ -1200,9 +1272,9 @@ class DisplayManagerApp(tk.Tk):
         self.enforce_taskbars_var.set(False)
         save_config(self.config)
         visible = [display.device_name for display in visible_entries]
-        changed = self._apply_taskbar_visibility(visible, update_status=False)
+        result = self._apply_taskbar_visibility(visible, update_status=False)
         self._schedule_taskbar_reapply(visible)
-        self._set_status(f"Reset taskbar state. Updated {changed} taskbar window(s); enforcement is off.")
+        self._set_status(f"Reset taskbar state. {taskbar_apply_status(result)}; enforcement is off.")
 
     def _rebuild_taskbar_checks(self):
         for child in self.taskbar_checks.winfo_children():
@@ -1231,8 +1303,9 @@ class DisplayManagerApp(tk.Tk):
         taskbars = self.taskbar_controller.list_taskbars(self.displays)
         mapped = sum(1 for taskbar in taskbars if taskbar["device_name"])
         visible = sum(1 for taskbar in taskbars if taskbar["visible"])
+        setting = "on" if self.taskbar_controller.is_multi_taskbar_enabled() else "off"
         self._set_status(
-            f"Found {len(self.displays)} monitor(s), {len(taskbars)} taskbar window(s), {mapped} mapped, {visible} visible."
+            f"Found {len(self.displays)} monitor(s), {len(taskbars)} taskbar window(s), {mapped} mapped, {visible} visible; Windows multi-taskbar {setting}."
         )
 
     def diagnose_taskbars(self):
@@ -1242,7 +1315,12 @@ class DisplayManagerApp(tk.Tk):
             desired = {display.device_name for display in self.displays if display.active}
         taskbars = self.taskbar_controller.list_taskbars(self.displays)
         parts = taskbar_diagnostic_parts(taskbars, desired)
-        self._set_status("Taskbars - " + "; ".join(parts[:4]) if parts else "Taskbars - none found")
+        setting = "on" if self.taskbar_controller.is_multi_taskbar_enabled() else "off"
+        missing = self.taskbar_controller.missing_desired_taskbars(desired, self.displays)
+        suffix = f"; missing: {', '.join(missing)}" if missing else ""
+        self._set_status(
+            f"Taskbars ({setting}) - " + "; ".join(parts[:4]) + suffix if parts else f"Taskbars ({setting}) - none found"
+        )
 
     def _current_taskbar_visible_selection(self):
         return [
@@ -1255,10 +1333,11 @@ class DisplayManagerApp(tk.Tk):
         return [display.device_name for display in taskbar_visible_entries(source, self.displays)]
 
     def _apply_taskbar_visibility(self, visible, update_status=True):
-        changed = self.taskbar_controller.apply_visibility(visible, self.displays)
+        result = self.taskbar_controller.apply_visibility(visible, self.displays)
         if update_status:
-            self._set_status(f"Updated {changed} taskbar window(s).")
-        return changed
+            missing = self.taskbar_controller.missing_desired_taskbars(visible, self.displays)
+            self._set_status(taskbar_apply_status(result, missing) + ".")
+        return result
 
     def _schedule_taskbar_reapply(self, visible):
         for delay_ms in (350, 1200, 2500, 5000):
@@ -1273,9 +1352,10 @@ class DisplayManagerApp(tk.Tk):
         if not self._has_saved_taskbar_visibility():
             return
         visible = self._resolve_taskbar_visible_devices(self.config)
-        changed = self._apply_taskbar_visibility(visible, update_status=False)
+        result = self._apply_taskbar_visibility(visible, update_status=False)
         self._schedule_taskbar_reapply(visible)
-        self._set_status(f"Restored saved taskbar visibility. Updated {changed} taskbar window(s).")
+        missing = self.taskbar_controller.missing_desired_taskbars(visible, self.displays)
+        self._set_status(f"Restored saved taskbar visibility. {taskbar_apply_status(result, missing)}.")
 
     def _has_saved_taskbar_visibility(self):
         return "taskbar_visible_displays" in self.config or "taskbar_visible_monitors" in self.config
