@@ -222,6 +222,8 @@ class DisplayController:
     def apply_profile(self, profile):
         errors = []
         for display in profile.get("displays", []):
+            if not display.get("active", True):
+                continue
             device = display["device_name"]
             mode = DEVMODEW()
             mode.dmSize = ctypes.sizeof(mode)
@@ -299,14 +301,20 @@ class TaskbarController:
         return changed
 
     def _match_display(self, rect, displays):
-        cx = (rect.left + rect.right) // 2
-        cy = (rect.top + rect.bottom) // 2
+        best_display = None
+        best_overlap = 0
         for display in displays:
             if not display.active:
                 continue
-            if display.x <= cx < display.x + display.width and display.y <= cy < display.y + display.height:
-                return display
-        return None
+            left = max(rect.left, display.x)
+            top = max(rect.top, display.y)
+            right = min(rect.right, display.x + display.width)
+            bottom = min(rect.bottom, display.y + display.height)
+            overlap = max(0, right - left) * max(0, bottom - top)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_display = display
+        return best_display
 
 
 class HotkeyManager:
@@ -408,6 +416,126 @@ def save_config(config):
     CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
 
+class ProfileEditorDialog(tk.Toplevel):
+    def __init__(self, parent, profile):
+        super().__init__(parent)
+        self.title("Edit Display Profile")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(True, True)
+        self.result = None
+        self.profile = json.loads(json.dumps(profile))
+        self.rows = []
+
+        self._build_ui()
+        self.wait_window(self)
+
+    def _build_ui(self):
+        root = ttk.Frame(self, padding=12)
+        root.pack(fill=tk.BOTH, expand=True)
+        root.columnconfigure(1, weight=1)
+        root.rowconfigure(2, weight=1)
+
+        ttk.Label(root, text="Name").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        self.name_var = tk.StringVar(value=self.profile.get("name", ""))
+        ttk.Entry(root, textvariable=self.name_var).grid(row=0, column=1, sticky="ew", pady=(0, 8))
+
+        ttk.Label(root, text="Hotkey").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(0, 10))
+        self.hotkey_var = tk.StringVar(value=self.profile.get("hotkey", ""))
+        ttk.Entry(root, textvariable=self.hotkey_var).grid(row=1, column=1, sticky="ew", pady=(0, 10))
+
+        table_frame = ttk.Frame(root)
+        table_frame.grid(row=2, column=0, columnspan=2, sticky="nsew")
+        for index in range(8):
+            table_frame.columnconfigure(index, weight=1 if index == 1 else 0)
+
+        headers = ("Use", "Display", "X", "Y", "Width", "Height", "Hz", "Taskbar")
+        for column, text in enumerate(headers):
+            ttk.Label(table_frame, text=text, font=("Segoe UI", 9, "bold")).grid(
+                row=0, column=column, sticky="w", padx=4, pady=(0, 4)
+            )
+
+        visible_taskbars = set(self.profile.get("taskbar_visible_displays", []))
+        for row_index, display in enumerate(self.profile.get("displays", []), start=1):
+            enabled_var = tk.BooleanVar(value=bool(display.get("active", True)))
+            taskbar_var = tk.BooleanVar(value=display.get("device_name") in visible_taskbars)
+            values = {
+                "x": tk.StringVar(value=str(display.get("x", 0))),
+                "y": tk.StringVar(value=str(display.get("y", 0))),
+                "width": tk.StringVar(value=str(display.get("width", 0))),
+                "height": tk.StringVar(value=str(display.get("height", 0))),
+                "frequency": tk.StringVar(value=str(display.get("frequency", 0))),
+            }
+
+            ttk.Checkbutton(table_frame, variable=enabled_var).grid(row=row_index, column=0, padx=4, pady=2)
+            ttk.Label(table_frame, text=display.get("label", display.get("device_name", ""))).grid(
+                row=row_index, column=1, sticky="w", padx=4, pady=2
+            )
+            ttk.Entry(table_frame, textvariable=values["x"], width=7).grid(row=row_index, column=2, padx=4, pady=2)
+            ttk.Entry(table_frame, textvariable=values["y"], width=7).grid(row=row_index, column=3, padx=4, pady=2)
+            ttk.Entry(table_frame, textvariable=values["width"], width=8).grid(
+                row=row_index, column=4, padx=4, pady=2
+            )
+            ttk.Entry(table_frame, textvariable=values["height"], width=8).grid(
+                row=row_index, column=5, padx=4, pady=2
+            )
+            ttk.Entry(table_frame, textvariable=values["frequency"], width=7).grid(
+                row=row_index, column=6, padx=4, pady=2
+            )
+            ttk.Checkbutton(table_frame, variable=taskbar_var).grid(row=row_index, column=7, padx=4, pady=2)
+            self.rows.append(
+                {
+                    "display": display,
+                    "enabled": enabled_var,
+                    "taskbar": taskbar_var,
+                    "values": values,
+                }
+            )
+
+        buttons = ttk.Frame(root)
+        buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Save", command=self._save).pack(side=tk.RIGHT, padx=(0, 8))
+
+    def _save(self):
+        name = self.name_var.get().strip()
+        if not name:
+            messagebox.showwarning("Profile Name Required", "Enter a profile name.", parent=self)
+            return
+
+        hotkey = self.hotkey_var.get().strip()
+        if hotkey and not parse_hotkey(hotkey):
+            messagebox.showwarning(
+                "Unsupported Hotkey",
+                "Use combinations like Ctrl+Alt+1, Ctrl+Shift+F9, or Win+Alt+2.",
+                parent=self,
+            )
+            return
+
+        updated_displays = []
+        visible_taskbars = []
+        for row in self.rows:
+            display = dict(row["display"])
+            display["active"] = row["enabled"].get()
+            try:
+                for key, variable in row["values"].items():
+                    display[key] = int(variable.get())
+            except ValueError:
+                messagebox.showwarning("Invalid Display Value", "Display values must be whole numbers.", parent=self)
+                return
+            if display["active"] and row["taskbar"].get():
+                visible_taskbars.append(display["device_name"])
+            updated_displays.append(display)
+
+        self.result = {
+            "name": name,
+            "hotkey": hotkey,
+            "displays": updated_displays,
+            "taskbar_visible_displays": visible_taskbars,
+        }
+        self.destroy()
+
+
 class DisplayManagerApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -421,7 +549,6 @@ class DisplayManagerApp(tk.Tk):
         self.hotkeys = HotkeyManager(self.hotkey_events)
         self.config = load_config()
         self.displays = []
-        self.profile_vars = {}
         self.taskbar_vars = {}
 
         self._build_ui()
@@ -478,7 +605,7 @@ class DisplayManagerApp(tk.Tk):
         ttk.Button(profile_buttons, text="Apply Selected", command=self.apply_selected_profile).pack(
             side=tk.LEFT, padx=(0, 6)
         )
-        ttk.Button(profile_buttons, text="Edit Hotkey", command=self.edit_selected_hotkey).pack(
+        ttk.Button(profile_buttons, text="Edit Profile", command=self.edit_selected_profile).pack(
             side=tk.LEFT, padx=(0, 6)
         )
         ttk.Button(profile_buttons, text="Delete", command=self.delete_selected_profile).pack(side=tk.LEFT)
@@ -497,6 +624,9 @@ class DisplayManagerApp(tk.Tk):
         )
         ttk.Button(taskbar_buttons, text="Show Taskbar Everywhere", command=self.show_taskbar_everywhere).pack(
             side=tk.LEFT
+        )
+        ttk.Button(taskbar_buttons, text="Refresh Taskbars", command=self.refresh_taskbar_status).pack(
+            side=tk.LEFT, padx=(6, 0)
         )
 
         self.status = ttk.Label(root, text="", anchor="w")
@@ -519,7 +649,7 @@ class DisplayManagerApp(tk.Tk):
                 ),
             )
         self._rebuild_taskbar_checks()
-        self._set_status(f"Found {len(self.displays)} display adapter(s).")
+        self.refresh_taskbar_status()
 
     def refresh_profiles(self):
         self.profile_list.delete(0, tk.END)
@@ -537,6 +667,13 @@ class DisplayManagerApp(tk.Tk):
             "Optional hotkey, for example Ctrl+Alt+1:",
             parent=self,
         )
+        if hotkey and not parse_hotkey(hotkey):
+            messagebox.showwarning(
+                "Unsupported Hotkey",
+                "Use combinations like Ctrl+Alt+1, Ctrl+Shift+F9, or Win+Alt+2.",
+                parent=self,
+            )
+            return
         profile = {
             "name": name.strip(),
             "hotkey": (hotkey or "").strip(),
@@ -554,6 +691,22 @@ class DisplayManagerApp(tk.Tk):
         self.refresh_profiles()
         self._set_status(f"Saved profile '{profile['name']}'.")
 
+    def edit_selected_profile(self):
+        profile = self._selected_profile()
+        if not profile:
+            return
+        dialog = ProfileEditorDialog(self, profile)
+        if not dialog.result:
+            return
+        profiles = [
+            item for item in self.config.get("profiles", []) if item["name"] != profile["name"]
+        ]
+        profiles.append(dialog.result)
+        self.config["profiles"] = profiles
+        save_config(self.config)
+        self.refresh_profiles()
+        self._set_status(f"Updated profile '{dialog.result['name']}'.")
+
     def apply_selected_profile(self):
         profile = self._selected_profile()
         if not profile:
@@ -569,23 +722,6 @@ class DisplayManagerApp(tk.Tk):
         if errors:
             messagebox.showwarning("Profile Applied With Warnings", "\n".join(errors), parent=self)
         self._set_status(f"Applied profile '{profile['name']}'.")
-
-    def edit_selected_hotkey(self):
-        profile = self._selected_profile()
-        if not profile:
-            return
-        hotkey = simpledialog.askstring(
-            "Edit Hotkey",
-            "Hotkey, for example Ctrl+Alt+1:",
-            initialvalue=profile.get("hotkey", ""),
-            parent=self,
-        )
-        if hotkey is None:
-            return
-        profile["hotkey"] = hotkey.strip()
-        save_config(self.config)
-        self.refresh_profiles()
-        self._set_status(f"Updated hotkey for '{profile['name']}'.")
 
     def delete_selected_profile(self):
         profile = self._selected_profile()
@@ -607,6 +743,8 @@ class DisplayManagerApp(tk.Tk):
             if display.active and self.taskbar_vars.get(display.device_name, tk.BooleanVar(value=True)).get()
         ]
         changed = self.taskbar_controller.apply_visibility(visible, self.displays)
+        self.config["taskbar_visible_displays"] = visible
+        save_config(self.config)
         self._set_status(f"Updated {changed} taskbar window(s).")
 
     def show_taskbar_everywhere(self):
@@ -618,13 +756,22 @@ class DisplayManagerApp(tk.Tk):
         for child in self.taskbar_checks.winfo_children():
             child.destroy()
         self.taskbar_vars = {}
+        saved_visible = set(self.config.get("taskbar_visible_displays", []))
+        has_saved_visible = "taskbar_visible_displays" in self.config
         for display in self.displays:
             if not display.active:
                 continue
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=(display.device_name in saved_visible) if has_saved_visible else True)
             self.taskbar_vars[display.device_name] = var
             label = f"{display.device_name} ({display.width} x {display.height} at {display.x}, {display.y})"
             ttk.Checkbutton(self.taskbar_checks, text=label, variable=var).pack(anchor="w", pady=2)
+
+    def refresh_taskbar_status(self):
+        taskbars = self.taskbar_controller.list_taskbars(self.displays)
+        mapped = sum(1 for taskbar in taskbars if taskbar["device_name"])
+        self._set_status(
+            f"Found {len(self.displays)} display adapter(s), {len(taskbars)} taskbar window(s), {mapped} mapped."
+        )
 
     def _selected_profile(self):
         selection = self.profile_list.curselection()
