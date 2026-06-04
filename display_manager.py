@@ -782,6 +782,10 @@ def taskbar_apply_status(result, missing=None):
     return "; ".join(parts)
 
 
+def should_retry_taskbar_apply(result, missing):
+    return bool(result.get("enabled_windows_setting") or missing)
+
+
 def display_value(display, key, default=""):
     if isinstance(display, dict):
         return display.get(key, default)
@@ -962,8 +966,7 @@ class DisplayManagerApp(tk.Tk):
         self.refresh_displays(repair_profiles=True)
         self.refresh_profiles()
         self.after(200, self._poll_hotkeys)
-        self.after(750, self._reapply_saved_taskbar_visibility)
-        self.after(2500, self._taskbar_enforcement_loop)
+        self.after(10000, self._taskbar_enforcement_loop)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self):
@@ -1224,7 +1227,8 @@ class DisplayManagerApp(tk.Tk):
             save_config(self.config)
             self._rebuild_taskbar_checks()
             result = self._apply_taskbar_visibility(visible, update_status=False)
-            self._schedule_taskbar_reapply(visible)
+            missing = self.taskbar_controller.missing_desired_taskbars(visible, self.displays)
+            self._schedule_taskbar_reapply_if_needed(visible, result, missing)
         else:
             result = {"changed": 0}
         if errors:
@@ -1254,8 +1258,8 @@ class DisplayManagerApp(tk.Tk):
         self.config.update(visibility)
         save_config(self.config)
         result = self._apply_taskbar_visibility(visible, update_status=False)
-        self._schedule_taskbar_reapply(visible)
         missing = self.taskbar_controller.missing_desired_taskbars(visible, self.displays)
+        self._schedule_taskbar_reapply_if_needed(visible, result, missing)
         self._set_status(taskbar_apply_status(result, missing) + ".")
 
     def show_taskbar_everywhere(self):
@@ -1273,7 +1277,6 @@ class DisplayManagerApp(tk.Tk):
         save_config(self.config)
         visible = [display.device_name for display in visible_entries]
         result = self._apply_taskbar_visibility(visible, update_status=False)
-        self._schedule_taskbar_reapply(visible)
         self._set_status(f"Reset taskbar state. {taskbar_apply_status(result)}; enforcement is off.")
 
     def _rebuild_taskbar_checks(self):
@@ -1339,23 +1342,16 @@ class DisplayManagerApp(tk.Tk):
             self._set_status(taskbar_apply_status(result, missing) + ".")
         return result
 
-    def _schedule_taskbar_reapply(self, visible):
-        for delay_ms in (350, 1200, 2500, 5000):
+    def _schedule_taskbar_reapply_if_needed(self, visible, result, missing):
+        if not should_retry_taskbar_apply(result, missing):
+            return
+        for delay_ms in (1200, 3500):
             self.after(delay_ms, lambda selected=list(visible): self._apply_taskbar_visibility(selected, False))
 
     def _taskbar_enforcement_loop(self):
         if self.enforce_taskbars_var.get() and self._has_saved_taskbar_visibility():
             self._apply_taskbar_visibility(self._resolve_taskbar_visible_devices(self.config), False)
-        self.after(2500, self._taskbar_enforcement_loop)
-
-    def _reapply_saved_taskbar_visibility(self):
-        if not self._has_saved_taskbar_visibility():
-            return
-        visible = self._resolve_taskbar_visible_devices(self.config)
-        result = self._apply_taskbar_visibility(visible, update_status=False)
-        self._schedule_taskbar_reapply(visible)
-        missing = self.taskbar_controller.missing_desired_taskbars(visible, self.displays)
-        self._set_status(f"Restored saved taskbar visibility. {taskbar_apply_status(result, missing)}.")
+        self.after(10000, self._taskbar_enforcement_loop)
 
     def _has_saved_taskbar_visibility(self):
         return "taskbar_visible_displays" in self.config or "taskbar_visible_monitors" in self.config

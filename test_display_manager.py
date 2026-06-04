@@ -12,6 +12,7 @@ from display_manager import (
     parse_edid_monitor_name,
     profile_summary,
     repair_profile_for_current_monitors,
+    should_retry_taskbar_apply,
     short_identity,
     taskbar_apply_status,
     taskbar_diagnostic_parts,
@@ -104,6 +105,11 @@ class DisplayManagerLogicTests(unittest.TestCase):
             ),
             "Updated 1 taskbar window(s); enabled Windows multi-taskbar setting; missing taskbars for DISPLAY2",
         )
+
+    def test_should_retry_taskbar_apply_only_when_windows_needs_time(self):
+        self.assertFalse(should_retry_taskbar_apply({"changed": 1}, []))
+        self.assertTrue(should_retry_taskbar_apply({"changed": 0, "enabled_windows_setting": True}, []))
+        self.assertTrue(should_retry_taskbar_apply({"changed": 0}, ["DISPLAY2"]))
 
     def test_repair_profile_for_current_monitors_drops_stale_adapters_and_backfills_ids(self):
         profile = {
