@@ -588,6 +588,16 @@ def taskbar_visibility_payload(displays):
     }
 
 
+def unique_profile_name(base_name, profiles):
+    existing = {profile.get("name", "") for profile in profiles}
+    if base_name not in existing:
+        return base_name
+    suffix = 2
+    while f"{base_name} {suffix}" in existing:
+        suffix += 1
+    return f"{base_name} {suffix}"
+
+
 def display_value(display, key, default=""):
     if isinstance(display, dict):
         return display.get(key, default)
@@ -843,6 +853,9 @@ class DisplayManagerApp(tk.Tk):
         ttk.Button(profile_buttons, text="Edit Profile", command=self.edit_selected_profile).pack(
             side=tk.LEFT, padx=(0, 6)
         )
+        ttk.Button(profile_buttons, text="Duplicate", command=self.duplicate_selected_profile).pack(
+            side=tk.LEFT, padx=(0, 6)
+        )
         ttk.Button(profile_buttons, text="Delete", command=self.delete_selected_profile).pack(side=tk.LEFT)
 
         taskbar_frame = ttk.LabelFrame(root, text="Taskbar Visibility Per Display", padding=10)
@@ -956,6 +969,20 @@ class DisplayManagerApp(tk.Tk):
         save_config(self.config)
         self.refresh_profiles()
         self._set_status(f"Updated profile '{dialog.result['name']}'.")
+
+    def duplicate_selected_profile(self):
+        profile = self._selected_profile()
+        if not profile:
+            return
+        name = unique_profile_name(f"{profile['name']} Copy", self.config.get("profiles", []))
+        duplicate = json.loads(json.dumps(profile))
+        duplicate["name"] = name
+        duplicate["hotkey"] = ""
+        self.config.setdefault("profiles", []).append(duplicate)
+        save_config(self.config)
+        self.refresh_profiles()
+        self._select_profile_by_name(name)
+        self._set_status(f"Duplicated profile '{profile['name']}' as '{name}'.")
 
     def apply_selected_profile(self):
         profile = self._selected_profile()
@@ -1084,6 +1111,15 @@ class DisplayManagerApp(tk.Tk):
             messagebox.showinfo("Select Profile", "Choose a profile first.", parent=self)
             return None
         return self.config.get("profiles", [])[int(selection[0])]
+
+    def _select_profile_by_name(self, name):
+        for index, profile in enumerate(self.config.get("profiles", [])):
+            if profile.get("name") == name:
+                iid = str(index)
+                self.profile_tree.selection_set(iid)
+                self.profile_tree.focus(iid)
+                self.profile_tree.see(iid)
+                return
 
     def _poll_hotkeys(self):
         try:

@@ -10,6 +10,7 @@ A small Windows display manager prototype.
 - Stores monitor hardware identity fields in profiles so saved layouts can be matched back to the same physical monitor when Windows display numbers move around.
 - Saves the current monitor layout as named profiles.
 - Edits saved profiles, including display position, resolution, refresh rate, apply selection, enabled/disabled monitor state, hotkey, and taskbar choices.
+- Duplicates saved profiles so variants like dual/triple monitor layouts are quicker to create.
 - Applies saved profiles with Windows display APIs.
 - Registers optional global hotkeys while the app is running, such as `Ctrl+Alt+1`.
 - Shows or hides Windows taskbar windows per active display.
@@ -26,15 +27,18 @@ Double-click `run.bat`, or run:
 python .\display_manager.py
 ```
 
+To launch without a console window, double-click `BetterDisplaySettings.pyw`.
+
 Profiles are stored beside the app in `display_profiles.json`.
 
 ## Workflow
 
 1. Open the app.
 2. Click `Save Current As...` to capture the current Windows display layout.
-3. Select a profile and click `Edit Profile` to customize display coordinates, resolution, refresh rate, enabled monitor state, taskbar visibility, or hotkey.
-4. Click `Apply Selected`, or use the configured hotkey while the app is running.
-5. Use the taskbar checkboxes when you only want to update which screens show a taskbar.
+3. Select a profile and click `Duplicate` if you want to start a variant from an existing layout.
+4. Select a profile and click `Edit Profile` to customize display coordinates, resolution, refresh rate, enabled monitor state, taskbar visibility, or hotkey.
+5. Click `Apply Selected`, or use the configured hotkey while the app is running.
+6. Use the taskbar checkboxes when you only want to update which screens show a taskbar.
 
 In the profile editor:
 

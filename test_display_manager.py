@@ -10,6 +10,7 @@ from display_manager import (
     profile_summary,
     short_identity,
     taskbar_visibility_payload,
+    unique_profile_name,
 )
 
 
@@ -76,6 +77,12 @@ class DisplayManagerLogicTests(unittest.TestCase):
 
         self.assertEqual(payload["taskbar_visible_displays"], ["DISPLAY1", "DISPLAY2"])
         self.assertEqual(payload["taskbar_visible_monitors"], ["MONITOR-1", "KEY-2"])
+
+    def test_unique_profile_name_adds_numeric_suffix(self):
+        profiles = [{"name": "Triple Copy"}, {"name": "Triple Copy 2"}]
+
+        self.assertEqual(unique_profile_name("Triple Copy", profiles), "Triple Copy 3")
+        self.assertEqual(unique_profile_name("Dual Copy", profiles), "Dual Copy")
 
     def test_resolve_device_name_reports_identity_match(self):
         controller = DisplayController()
