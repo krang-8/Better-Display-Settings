@@ -54,6 +54,8 @@ CDS_SET_PRIMARY = 0x00000010
 CDS_NORESET = 0x10000000
 DISP_CHANGE_SUCCESSFUL = 0
 MONITORINFOF_PRIMARY = 0x00000001
+SPI_SETWORKAREA = 0x002F
+SPIF_SENDCHANGE = 0x0002
 
 SW_HIDE = 0
 SW_SHOW = 5
@@ -204,6 +206,9 @@ IsWindowVisible.restype = wintypes.BOOL
 ShowWindow = user32.ShowWindow
 ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 ShowWindow.restype = wintypes.BOOL
+SystemParametersInfoW = user32.SystemParametersInfoW
+SystemParametersInfoW.argtypes = [wintypes.UINT, wintypes.UINT, wintypes.LPVOID, wintypes.UINT]
+SystemParametersInfoW.restype = wintypes.BOOL
 RegisterHotKey = user32.RegisterHotKey
 RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
 RegisterHotKey.restype = wintypes.BOOL
@@ -415,6 +420,9 @@ class DisplayController:
 class TaskbarController:
     TASKBAR_CLASSES = {"Shell_TrayWnd", "Shell_SecondaryTrayWnd"}
 
+    def __init__(self):
+        self.work_area_cache = {}
+
     def is_multi_taskbar_enabled(self):
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, TASKBAR_SETTINGS_SUBKEY) as key:
@@ -478,7 +486,8 @@ class TaskbarController:
         if self._needs_secondary_taskbars(visible, displays):
             enabled_windows_setting = self.ensure_multi_taskbar_enabled()
         changed = 0
-        for taskbar in self.list_taskbars(displays):
+        taskbars = self.list_taskbars(displays)
+        for taskbar in taskbars:
             device_name = taskbar["device_name"]
             if device_name is None:
                 continue
@@ -487,9 +496,33 @@ class TaskbarController:
                 continue
             ShowWindow(taskbar["hwnd"], SW_SHOW if should_show else SW_HIDE)
             changed += 1
+        work_area_result = self.apply_work_areas(visible, displays, self.list_taskbars(displays))
         return {
             "changed": changed,
             "enabled_windows_setting": enabled_windows_setting,
+            **work_area_result,
+        }
+
+    def apply_work_areas(self, visible_device_names, displays, taskbars):
+        changed = 0
+        failed = 0
+        targets = taskbar_work_area_targets(displays, visible_device_names, taskbars)
+        current_work_areas = current_monitor_work_areas()
+        for device_name, target in targets.items():
+            if current_work_areas.get(device_name) == target:
+                self.work_area_cache[device_name] = target
+                continue
+            if self.work_area_cache.get(device_name) == target and not current_work_areas:
+                continue
+            rect = RECT(*target)
+            if SystemParametersInfoW(SPI_SETWORKAREA, 0, ctypes.byref(rect), SPIF_SENDCHANGE):
+                self.work_area_cache[device_name] = target
+                changed += 1
+            else:
+                failed += 1
+        return {
+            "work_area_changed": changed,
+            "work_area_failed": failed,
         }
 
     def missing_desired_taskbars(self, visible_device_names, displays):
@@ -682,6 +715,86 @@ def display_to_profile_entry(display):
     return entry
 
 
+def display_monitor_rect(display):
+    left = int(display_value(display, "x", 0))
+    top = int(display_value(display, "y", 0))
+    width = int(display_value(display, "width", 0))
+    height = int(display_value(display, "height", 0))
+    return (left, top, left + width, top + height)
+
+
+def current_monitor_work_areas():
+    work_areas = {}
+
+    def callback(hmonitor, _hdc, _rect, _data):
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(info)
+        if GetMonitorInfoW(hmonitor, ctypes.byref(info)):
+            work_areas[info.szDevice] = (
+                int(info.rcWork.left),
+                int(info.rcWork.top),
+                int(info.rcWork.right),
+                int(info.rcWork.bottom),
+            )
+        return True
+
+    EnumDisplayMonitors(None, None, MonitorEnumProc(callback), 0)
+    return work_areas
+
+
+def subtract_taskbar_from_work_area(monitor_rect, work_rect, taskbar_rect):
+    monitor_left, monitor_top, monitor_right, monitor_bottom = monitor_rect
+    left, top, right, bottom = taskbar_rect
+    overlap_width = max(0, min(right, monitor_right) - max(left, monitor_left))
+    overlap_height = max(0, min(bottom, monitor_bottom) - max(top, monitor_top))
+    if not overlap_width or not overlap_height:
+        return work_rect
+
+    monitor_width = max(monitor_right - monitor_left, 1)
+    monitor_height = max(monitor_bottom - monitor_top, 1)
+    work_left, work_top, work_right, work_bottom = work_rect
+
+    if overlap_width >= monitor_width * 0.5:
+        if top <= monitor_top and bottom > monitor_top:
+            work_top = max(work_top, min(bottom, monitor_bottom))
+        elif bottom >= monitor_bottom and top < monitor_bottom:
+            work_bottom = min(work_bottom, max(top, monitor_top))
+    elif overlap_height >= monitor_height * 0.5:
+        if left <= monitor_left and right > monitor_left:
+            work_left = max(work_left, min(right, monitor_right))
+        elif right >= monitor_right and left < monitor_right:
+            work_right = min(work_right, max(left, monitor_left))
+    return (work_left, work_top, work_right, work_bottom)
+
+
+def taskbar_work_area_targets(displays, visible_device_names, taskbars):
+    visible = set(visible_device_names)
+    targets = {}
+    taskbars_by_device = {}
+    for taskbar in taskbars:
+        device_name = taskbar.get("device_name")
+        if device_name and taskbar.get("visible") and taskbar.get("rect"):
+            taskbars_by_device.setdefault(device_name, []).append(taskbar["rect"])
+
+    for display in displays:
+        if not display_value(display, "active", False):
+            continue
+        device_name = display_value(display, "device_name")
+        monitor_rect = display_monitor_rect(display)
+        if device_name not in visible:
+            targets[device_name] = monitor_rect
+            continue
+
+        display_taskbars = taskbars_by_device.get(device_name, [])
+        if not display_taskbars:
+            continue
+        work_rect = monitor_rect
+        for taskbar_rect in display_taskbars:
+            work_rect = subtract_taskbar_from_work_area(monitor_rect, work_rect, taskbar_rect)
+        targets[device_name] = work_rect
+    return targets
+
+
 def profile_summary(profile):
     displays = profile.get("displays", [])
     applied = [display for display in displays if display.get("apply", True)]
@@ -811,11 +924,17 @@ def taskbar_diagnostic_parts(taskbars, desired_device_names):
 
 def taskbar_apply_status(result, missing=None):
     changed = int(result.get("changed", 0))
+    work_area_changed = int(result.get("work_area_changed", 0))
+    work_area_failed = int(result.get("work_area_failed", 0))
     parts = [
         f"Updated {changed} taskbar window(s)"
         if changed
         else "No taskbar window changes needed"
     ]
+    if work_area_changed:
+        parts.append(f"updated {work_area_changed} work area(s)")
+    if work_area_failed:
+        parts.append(f"{work_area_failed} work area update(s) failed")
     if result.get("enabled_windows_setting"):
         parts.append("enabled Windows multi-taskbar setting")
     if missing:

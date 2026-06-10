@@ -8,6 +8,7 @@ from display_manager import (
     backup_config,
     display_layout_bounds,
     display_map_rectangles,
+    display_monitor_rect,
     display_state_label,
     display_state_tag,
     DisplayController,
@@ -27,6 +28,8 @@ from display_manager import (
     taskbar_diagnostic_parts,
     taskbar_selection_summary,
     taskbar_visibility_payload,
+    taskbar_work_area_targets,
+    subtract_taskbar_from_work_area,
     unique_profile_name,
 )
 
@@ -145,6 +148,12 @@ class DisplayManagerLogicTests(unittest.TestCase):
             "No taskbar window changes needed",
         )
 
+    def test_taskbar_apply_status_reports_work_area_changes(self):
+        self.assertEqual(
+            taskbar_apply_status({"changed": 0, "work_area_changed": 2, "work_area_failed": 1}, []),
+            "No taskbar window changes needed; updated 2 work area(s); 1 work area update(s) failed",
+        )
+
     def test_should_retry_taskbar_apply_only_when_windows_needs_time(self):
         self.assertFalse(should_retry_taskbar_apply({"changed": 1}, []))
         self.assertTrue(should_retry_taskbar_apply({"changed": 0, "enabled_windows_setting": True}, []))
@@ -218,6 +227,41 @@ class DisplayManagerLogicTests(unittest.TestCase):
         self.assertEqual(rectangles[1]["x1"], 120)
         self.assertEqual(rectangles[1]["x2"], 220)
         self.assertEqual(rectangles[0]["y1"], 20)
+
+    def test_display_monitor_rect_uses_virtual_screen_coordinates(self):
+        display = SimpleNamespace(x=-1920, y=120, width=1920, height=1080)
+
+        self.assertEqual(display_monitor_rect(display), (-1920, 120, 0, 1200))
+
+    def test_subtract_taskbar_from_work_area_handles_bottom_and_left_edges(self):
+        monitor = (0, 0, 2560, 1440)
+
+        self.assertEqual(
+            subtract_taskbar_from_work_area(monitor, monitor, (0, 1392, 2560, 1440)),
+            (0, 0, 2560, 1392),
+        )
+        self.assertEqual(
+            subtract_taskbar_from_work_area(monitor, monitor, (0, 0, 48, 1440)),
+            (48, 0, 2560, 1440),
+        )
+
+    def test_taskbar_work_area_targets_release_hidden_monitor_area(self):
+        displays = [
+            SimpleNamespace(device_name="DISPLAY1", active=True, x=0, y=0, width=2560, height=1440),
+            SimpleNamespace(device_name="DISPLAY2", active=True, x=2560, y=0, width=3840, height=2160),
+        ]
+        taskbars = [
+            {"device_name": "DISPLAY1", "visible": True, "rect": (0, 1392, 2560, 1440)},
+            {"device_name": "DISPLAY2", "visible": False, "rect": (2560, 2112, 6400, 2160)},
+        ]
+
+        self.assertEqual(
+            taskbar_work_area_targets(displays, ["DISPLAY1"], taskbars),
+            {
+                "DISPLAY1": (0, 0, 2560, 1392),
+                "DISPLAY2": (2560, 0, 6400, 2160),
+            },
+        )
 
     def test_repair_profile_for_current_monitors_drops_stale_adapters_and_backfills_ids(self):
         profile = {
