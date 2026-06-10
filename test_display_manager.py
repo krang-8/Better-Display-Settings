@@ -154,6 +154,12 @@ class DisplayManagerLogicTests(unittest.TestCase):
             "No taskbar window changes needed; updated 2 work area(s); 1 work area update(s) failed",
         )
 
+    def test_taskbar_apply_status_reports_work_area_error_details(self):
+        self.assertEqual(
+            taskbar_apply_status({"changed": 0, "work_area_failed": 1, "work_area_errors": ["DISPLAY3 (87)"]}, []),
+            "No taskbar window changes needed; 1 work area update(s) failed: DISPLAY3 (87)",
+        )
+
     def test_should_retry_taskbar_apply_only_when_windows_needs_time(self):
         self.assertFalse(should_retry_taskbar_apply({"changed": 1}, []))
         self.assertTrue(should_retry_taskbar_apply({"changed": 0, "enabled_windows_setting": True}, []))
@@ -261,6 +267,17 @@ class DisplayManagerLogicTests(unittest.TestCase):
                 "DISPLAY1": (0, 0, 2560, 1392),
                 "DISPLAY2": (2560, 0, 6400, 2160),
             },
+        )
+
+    def test_taskbar_work_area_targets_prefer_windows_monitor_bounds(self):
+        displays = [
+            SimpleNamespace(device_name="DISPLAY3", active=True, x=2560, y=0, width=2560, height=1440),
+        ]
+        monitor_rects = {"DISPLAY3": (2560, 0, 6400, 2160)}
+
+        self.assertEqual(
+            taskbar_work_area_targets(displays, [], [], monitor_rects),
+            {"DISPLAY3": (2560, 0, 6400, 2160)},
         )
 
     def test_repair_profile_for_current_monitors_drops_stale_adapters_and_backfills_ids(self):

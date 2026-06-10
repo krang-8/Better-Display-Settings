@@ -506,8 +506,17 @@ class TaskbarController:
     def apply_work_areas(self, visible_device_names, displays, taskbars):
         changed = 0
         failed = 0
-        targets = taskbar_work_area_targets(displays, visible_device_names, taskbars)
-        current_work_areas = current_monitor_work_areas()
+        errors = []
+        current_monitor_state = current_monitor_rects()
+        current_work_areas = {
+            device_name: state["work"]
+            for device_name, state in current_monitor_state.items()
+        }
+        monitor_rects = {
+            device_name: state["monitor"]
+            for device_name, state in current_monitor_state.items()
+        }
+        targets = taskbar_work_area_targets(displays, visible_device_names, taskbars, monitor_rects)
         for device_name, target in targets.items():
             if current_work_areas.get(device_name) == target:
                 self.work_area_cache[device_name] = target
@@ -515,14 +524,18 @@ class TaskbarController:
             if self.work_area_cache.get(device_name) == target and not current_work_areas:
                 continue
             rect = RECT(*target)
+            ctypes.set_last_error(0)
             if SystemParametersInfoW(SPI_SETWORKAREA, 0, ctypes.byref(rect), SPIF_SENDCHANGE):
                 self.work_area_cache[device_name] = target
                 changed += 1
             else:
+                last_error = ctypes.get_last_error()
+                errors.append(f"{device_name} ({last_error})")
                 failed += 1
         return {
             "work_area_changed": changed,
             "work_area_failed": failed,
+            "work_area_errors": errors,
         }
 
     def missing_desired_taskbars(self, visible_device_names, displays):
@@ -723,23 +736,31 @@ def display_monitor_rect(display):
     return (left, top, left + width, top + height)
 
 
-def current_monitor_work_areas():
-    work_areas = {}
+def current_monitor_rects():
+    monitors = {}
 
     def callback(hmonitor, _hdc, _rect, _data):
         info = MONITORINFOEXW()
         info.cbSize = ctypes.sizeof(info)
         if GetMonitorInfoW(hmonitor, ctypes.byref(info)):
-            work_areas[info.szDevice] = (
-                int(info.rcWork.left),
-                int(info.rcWork.top),
-                int(info.rcWork.right),
-                int(info.rcWork.bottom),
-            )
+            monitors[info.szDevice] = {
+                "monitor": (
+                    int(info.rcMonitor.left),
+                    int(info.rcMonitor.top),
+                    int(info.rcMonitor.right),
+                    int(info.rcMonitor.bottom),
+                ),
+                "work": (
+                    int(info.rcWork.left),
+                    int(info.rcWork.top),
+                    int(info.rcWork.right),
+                    int(info.rcWork.bottom),
+                ),
+            }
         return True
 
     EnumDisplayMonitors(None, None, MonitorEnumProc(callback), 0)
-    return work_areas
+    return monitors
 
 
 def subtract_taskbar_from_work_area(monitor_rect, work_rect, taskbar_rect):
@@ -767,8 +788,9 @@ def subtract_taskbar_from_work_area(monitor_rect, work_rect, taskbar_rect):
     return (work_left, work_top, work_right, work_bottom)
 
 
-def taskbar_work_area_targets(displays, visible_device_names, taskbars):
+def taskbar_work_area_targets(displays, visible_device_names, taskbars, monitor_rects=None):
     visible = set(visible_device_names)
+    monitor_rects = monitor_rects or {}
     targets = {}
     taskbars_by_device = {}
     for taskbar in taskbars:
@@ -780,7 +802,7 @@ def taskbar_work_area_targets(displays, visible_device_names, taskbars):
         if not display_value(display, "active", False):
             continue
         device_name = display_value(display, "device_name")
-        monitor_rect = display_monitor_rect(display)
+        monitor_rect = monitor_rects.get(device_name) or display_monitor_rect(display)
         if device_name not in visible:
             targets[device_name] = monitor_rect
             continue
@@ -926,6 +948,7 @@ def taskbar_apply_status(result, missing=None):
     changed = int(result.get("changed", 0))
     work_area_changed = int(result.get("work_area_changed", 0))
     work_area_failed = int(result.get("work_area_failed", 0))
+    work_area_errors = result.get("work_area_errors", [])
     parts = [
         f"Updated {changed} taskbar window(s)"
         if changed
@@ -934,7 +957,10 @@ def taskbar_apply_status(result, missing=None):
     if work_area_changed:
         parts.append(f"updated {work_area_changed} work area(s)")
     if work_area_failed:
-        parts.append(f"{work_area_failed} work area update(s) failed")
+        message = f"{work_area_failed} work area update(s) failed"
+        if work_area_errors:
+            message += ": " + ", ".join(work_area_errors)
+        parts.append(message)
     if result.get("enabled_windows_setting"):
         parts.append("enabled Windows multi-taskbar setting")
     if missing:
