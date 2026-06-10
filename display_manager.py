@@ -496,11 +496,9 @@ class TaskbarController:
                 continue
             ShowWindow(taskbar["hwnd"], SW_SHOW if should_show else SW_HIDE)
             changed += 1
-        work_area_result = self.apply_work_areas(visible, displays, self.list_taskbars(displays))
         return {
             "changed": changed,
             "enabled_windows_setting": enabled_windows_setting,
-            **work_area_result,
         }
 
     def apply_work_areas(self, visible_device_names, displays, taskbars):

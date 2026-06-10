@@ -24,6 +24,7 @@ from display_manager import (
     should_retry_taskbar_apply,
     short_identity,
     status_message,
+    TaskbarController,
     taskbar_apply_status,
     taskbar_diagnostic_parts,
     taskbar_selection_summary,
@@ -131,6 +132,16 @@ class DisplayManagerLogicTests(unittest.TestCase):
         self.assertEqual(
             taskbar_diagnostic_parts(taskbars, {"DISPLAY1"}),
             ["DISPLAY1: visible/show", "DISPLAY2: visible/hide", "unmapped: hidden/hide"],
+        )
+
+    def test_apply_visibility_does_not_adjust_work_areas(self):
+        controller = TaskbarController()
+        controller.list_taskbars = lambda displays: []
+        controller.apply_work_areas = lambda visible, displays, taskbars: self.fail("work areas should not be touched")
+
+        self.assertEqual(
+            controller.apply_visibility([], []),
+            {"changed": 0, "enabled_windows_setting": False},
         )
 
     def test_taskbar_apply_status_reports_setting_and_missing_windows(self):
